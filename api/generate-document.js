@@ -400,6 +400,15 @@ function buildProject(cfg) {
   const c = cfg.client || {};
   const sg = cfg.sg_signer || {};
 
+  // Enforce single canonical tax and validity statements — strip any duplicates
+  const canonicalTax = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
+  const canonicalValidity = 'This proposal is valid for 30 days from the date above.';
+  const taxRe = /(sales tax|tax.*not included|tax.*included|proposal.*valid|valid.*\d+ days)/i;
+  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxRe.test(b));
+  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxRe.test(b));
+  const otherPricingNotes = (pricing.pricing_notes || []).filter(n => !taxRe.test(n));
+  pricing.pricing_notes = [canonicalTax, canonicalValidity, ...otherPricingNotes];
+
   // Pricing table — 2 columns: Cost Category | Amount
   const pricingHeaderRow = new TableRow({ tableHeader: true, children: [
     new TableCell({ borders: brd, width: { size: 7200, type: WidthType.DXA }, shading: { fill: BLUE, type: ShadingType.CLEAR }, margins: mg,
@@ -754,7 +763,12 @@ SECTION ORDER RULES — only apply when user explicitly asks to add/remove/reord
 - If no section changes requested, return section_order as null
 IMPORTANT: Never invent or add sections that were not explicitly requested.
 
-PRICING GUIDANCE: Roll up all individual tracker line items into the 4 categories. Parts & Equipment = all parts/equipment/materials. Engineering & Labor = all labor, programming, warranty, freight. Operations & Management = travel, lodging, meals, admin/PM. OptiClear Remote Management = only if OptiClear subscription included. The "total" must match the sum of category amounts. Never show individual line items.`;
+PRICING GUIDANCE: Roll up all individual tracker line items into the 4 categories. Parts & Equipment = all parts/equipment/materials. Engineering & Labor = all labor, programming, warranty, freight. Operations & Management = travel, lodging, meals, admin/PM. OptiClear Remote Management = only if OptiClear subscription is explicitly included in the source data.
+- The "total" must equal the exact figure from the source data — never calculate or estimate it.
+- Category amounts must come directly from the source data. If category-level breakdown is NOT present in the source data, return each category amount as 0 and add a contingency_note saying "Category breakdown not provided — total reflects full project investment."
+- NEVER invent, estimate, or split the total across categories based on assumptions. Only populate category amounts if they are explicitly stated or clearly calculable from the source data.
+- pricing_notes must contain exactly ONE entry about sales tax: "Sales tax is not included in the investment figures above and will be added by Solution Group Accounting." Do not add any other tax statement anywhere in the document.
+- Do not put the proposal validity period anywhere except pricing_notes. One entry only: "This proposal is valid for 30 days from the date above."`;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────

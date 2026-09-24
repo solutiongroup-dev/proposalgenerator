@@ -90,7 +90,43 @@ async function findDealById(dealId) {
   } catch(e) { return null; }
 }
 
-// ── Deal name builder ─────────────────────────────────────────────────────────
+// ── Find existing deal by client name (fuzzy) ─────────────────────────────────
+async function findExistingDealByClient(clientName, pipeline) {
+  if (!clientName) return null;
+  try {
+    // Search deals by dealname containing the client name
+    const cleanName = clientName.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const pipelineId = pipeline === 'Project' ? PIPELINES['Project'].pipelineId : PIPELINES['Recurring'].pipelineId;
+    const result = await hubspotRequest('POST', '/crm/v3/objects/deals/search', {
+      filterGroups: [{
+        filters: [
+          { propertyName: 'pipeline', operator: 'EQ', value: pipelineId },
+          { propertyName: 'closedate', operator: 'GT', value: String(Date.now() - 365 * 24 * 60 * 60 * 1000) }, // within last year
+        ]
+      }],
+      properties: ['dealname', 'amount', 'closedate', 'pipeline'],
+      limit: 50,
+      sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
+    });
+
+    if (!result.results?.length) return null;
+
+    // Fuzzy match — find deals whose name contains the client name words
+    const clientWords = cleanName.split(/\s+/).filter(w => w.length > 2);
+    const matches = result.results.filter(deal => {
+      const dealNameClean = (deal.properties?.dealname || '').toLowerCase().replace(/[^a-z0-9\s]/g, '');
+      return clientWords.every(word => dealNameClean.includes(word));
+    });
+
+    if (matches.length > 0) {
+      console.log(`Found existing deal for "${clientName}": ${matches[0].properties?.dealname} (${matches[0].id})`);
+      return matches[0].id;
+    }
+  } catch(e) {
+    console.warn('Fuzzy deal search failed:', e.message);
+  }
+  return null;
+}
 function buildDealName(clientName, docType, projectTitle) {
   if (projectTitle) {
     const words = projectTitle.replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).slice(0, 4).join(' ');
@@ -168,12 +204,20 @@ module.exports = async function (req, res) {
     let dealId;
     let isNew = false;
 
-    const existingDeal = await findDealById(existingDealId);
+    // Check 1: session-level existingDealId (fastest — same session)
+    let existingDeal = await findDealById(existingDealId);
+
+    // Check 2: fuzzy match by client name across all deals (cross-session duplicate prevention)
+    if (!existingDeal) {
+      const fuzzyId = await findExistingDealByClient(effectiveClientName, pipeline);
+      if (fuzzyId) existingDeal = await findDealById(fuzzyId);
+    }
 
     if (existingDeal) {
-      console.log('Updating existing deal:', existingDealId);
-      await hubspotRequest('PATCH', `/crm/v3/objects/deals/${existingDealId}`, { properties: dealProps });
-      dealId = existingDealId;
+      const foundId = existingDeal.id || existingDealId;
+      console.log('Updating existing deal:', foundId);
+      await hubspotRequest('PATCH', `/crm/v3/objects/deals/${foundId}`, { properties: dealProps });
+      dealId = foundId;
     } else {
       console.log('Creating new deal:', dealName);
       // Owner = Primary SG Contact on the deal

@@ -179,6 +179,17 @@ function buildProposal(cfg) {
   const pricing = cfg.pricing || {};
   const lineItems = pricing.line_items || [];
 
+  // Enforce single canonical tax and validity statements — identical to buildProject
+  const canonicalTaxP = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
+  const canonicalValidityP = 'This proposal is valid for 30 days from the date above.';
+  const taxReP = /(sales tax|tax.*not included|tax.*included|tax.*added|proposal.*valid|valid.*\d+ days)/i;
+  const markupReP = /(contingency|markup|margin|mark.?up|\d+%.*applied|\d+%.*markup)/i;
+  const leadTimeReP = /(lead.?time|\d+.*weeks.*pending|pricing.*budgetary)/i;
+  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxReP.test(b) && !markupReP.test(b));
+  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxReP.test(b) && !markupReP.test(b));
+  const otherNotesP = (pricing.pricing_notes || []).filter(n => !taxReP.test(n) && !markupReP.test(n) && !leadTimeReP.test(n));
+  pricing.pricing_notes = [canonicalTaxP, canonicalValidityP, ...otherNotesP];
+
   const pricingHeaderRow = new TableRow({
     tableHeader: true,
     children: [
@@ -404,9 +415,11 @@ function buildProject(cfg) {
   const canonicalTax = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
   const canonicalValidity = 'This proposal is valid for 30 days from the date above.';
   const taxRe = /(sales tax|tax.*not included|tax.*included|proposal.*valid|valid.*\d+ days)/i;
-  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxRe.test(b));
-  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxRe.test(b));
-  const otherPricingNotes = (pricing.pricing_notes || []).filter(n => !taxRe.test(n));
+  const markupRe = /(contingency|markup|margin|mark.?up|\d+%.*applied|\d+%.*markup)/i;
+  const leadTimeRe = /(lead.?time|lead time|\d+.*weeks.*pending|pricing.*budgetary)/i;
+  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxRe.test(b) && !markupRe.test(b));
+  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxRe.test(b) && !markupRe.test(b));
+  const otherPricingNotes = (pricing.pricing_notes || []).filter(n => !taxRe.test(n) && !markupRe.test(n) && !leadTimeRe.test(n));
   pricing.pricing_notes = [canonicalTax, canonicalValidity, ...otherPricingNotes];
 
   // Pricing table — 2 columns: Cost Category | Amount
@@ -713,13 +726,16 @@ CRITICAL RULES:
 - Timeline: ONLY include if the uploaded documents explicitly contain a schedule with specific timeframes (e.g. "Weeks 1-4", "Phase 1: 3 weeks", "Start: March 1"). Do NOT infer, estimate, or generate a timeline from project scope. Do NOT include a timeline just because there is a start date or project length. If no explicit schedule with phases or week ranges exists in the source material, return timeline as null or an empty array.
 - Contact names: only include if you have both first AND last name. Single names (e.g. "Gram") must be omitted entirely from contacts.
 - Never use em dashes anywhere. Use commas or periods instead.
-- REDUNDANCY RULE: Every fact, term, dollar amount, or commitment must appear exactly once, in the section where a reader would most naturally look for it. Specifically:
-  * Recurring or subscription fees: state amount, coverage, and timing once only — in the Commercial Summary line item. Do not repeat in Engineering Scope, Assumptions, or Next Steps.
-  * Sales tax treatment and proposal validity period: appear once only in the Commercial Summary. Do not restate elsewhere.
-  * Dates (start date, mobilization date, proposal date): reference each date once as the source of truth; use "the date above" or "the start date noted in the Commercial Summary" for any other mention rather than restating the literal date.
-  * Procedural commitments (lead times, purchase orders, authorization steps): consolidate into Next Steps only — do not preview earlier and repeat there.
-  * If a fact is relevant to two sections, place it in the section where it belongs and cross-reference from the other ("see Commercial Summary") rather than restating it.
-  * Before finalizing, mentally scan all sections for any phrase, dollar amount, or commitment that appears more than once and consolidate.
+- REDUNDANCY RULE: Every fact, term, dollar amount, or commitment must appear exactly once. Before writing each section, check whether that content already appeared earlier. Specifically:
+  * Scope exclusions and separate-quote commitments: state once in Key Assumptions. Do not preview in Introduction or Engineering Scope and then repeat in Assumptions and Next Steps. If it is an action item it goes in Next Steps; if it is a boundary/exclusion it goes in Assumptions. Not both and not four times.
+  * Third-party firms (engineering firms, subcontractors): name them once in Engineering Scope with context. Do not restate in Assumptions as a generic bullet.
+  * Lead times: state once in Next Steps as part of the procurement action item. Never in Commercial Summary pricing notes.
+  * Dollar amounts and costs: appear once in Commercial Summary. Do not restate in any other section.
+  * Recurring or subscription fees: state once in Commercial Summary line item only.
+  * Sales tax and proposal validity: once each in Commercial Summary pricing notes only.
+  * Dates: reference once; use "the date above" or "as noted in Section X" elsewhere.
+  * When user instructions introduce a new commitment (e.g. "provide stamped drawings"), place it in exactly one section — Assumptions if it is a scope boundary, Next Steps if it is an action. Do not echo it into Introduction, Engineering Scope, and both Assumptions and Next Steps.
+  * After drafting, scan every section for any sentence containing the same subject as a sentence in another section. If found, keep the one in the most appropriate section and delete the rest.
 
 FORM DATA: ${JSON.stringify(formData)}
 ${fileText ? `FILE CONTENT:\n${fileText}` : ''}
@@ -763,12 +779,15 @@ SECTION ORDER RULES — only apply when user explicitly asks to add/remove/reord
 - If no section changes requested, return section_order as null
 IMPORTANT: Never invent or add sections that were not explicitly requested.
 
-PRICING GUIDANCE: Roll up all individual tracker line items into the 4 categories. Parts & Equipment = all parts/equipment/materials. Engineering & Labor = all labor, programming, warranty, freight. Operations & Management = travel, lodging, meals, admin/PM. OptiClear Remote Management = only if OptiClear subscription is explicitly included in the source data.
-- The "total" must equal the exact figure from the source data — never calculate or estimate it.
-- Category amounts must come directly from the source data. If category-level breakdown is NOT present in the source data, return each category amount as 0 and add a contingency_note saying "Category breakdown not provided — total reflects full project investment."
-- NEVER invent, estimate, or split the total across categories based on assumptions. Only populate category amounts if they are explicitly stated or clearly calculable from the source data.
-- pricing_notes must contain exactly ONE entry about sales tax: "Sales tax is not included in the investment figures above and will be added by Solution Group Accounting." Do not add any other tax statement anywhere in the document.
-- Do not put the proposal validity period anywhere except pricing_notes. One entry only: "This proposal is valid for 30 days from the date above."`;
+PRICING GUIDANCE:
+- Use the FINAL marked-up total from the source data — this is the "Sales Price w/Contingency" or equivalent final total, not the subtotal before contingency markup. If multiple totals exist, always use the largest final figure.
+- Roll up line items into max 4 categories using their MARKED-UP sale prices (not estimated costs): Parts & Equipment = parts/equipment/materials. Engineering & Labor = labor, programming, engineering, warranty, freight. Operations & Management = travel, lodging, meals, admin/PM, crane. OptiClear Remote Management = ONLY if a subscription or setup cost is explicitly stated with a dollar value in the source data — a checkbox or "Yes" flag alone is NOT sufficient. If no dollar amount exists for OptiClear, omit the category entirely.
+- Category amounts must use the marked-up sale price figures from the source data. If a second contingency markup is applied on top of line item margins (common in SG trackers), apply that same multiplier to each category so they sum to the final total.
+- NEVER invent, estimate, or fabricate any dollar amount. If a category has no line items with dollar values, omit it.
+- NEVER mention markup percentage, contingency percentage, or margin anywhere in the document — not in pricing notes, assumptions, engineering scope, or anywhere else. The markup is silently baked into the numbers.
+- pricing_notes: exactly ONE tax statement and ONE validity statement. Nothing else. No lead times, no markup disclosure, no contingency language.
+- Lead times belong in Next Steps only — never in Commercial Summary pricing notes.
+- If the source data contains a fact (lead time, cost, commitment) that you include in one section, do not repeat it in any other section. Cross-reference with "see Commercial Summary" or "as noted above" instead of restating.`;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────

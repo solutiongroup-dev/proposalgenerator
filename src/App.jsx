@@ -1,4 +1,5 @@
 import React, { useState, useRef } from "react";
+import WaterSolveForm, { WS_FIELDS, WS_PARSE_KEYS, WS_DEFAULTS, WS_PARSE_GUIDE, parseWsItems, wsItemsTotal, wsProposalNumber } from "./WaterSolveForm.jsx";
 
 const SG_BLUE = "#2B579A";
 const SG_LIGHT = "#D5E8F0";
@@ -434,6 +435,7 @@ const DOC_TYPES = [
   { id:"assessment", icon:"🔍", title:"Assessment",         desc:"Operational & technical findings report with recommendations. No pricing.", badge:"Assessment",  badgeClass:"badge-a" },
   { id:"proposal",   icon:"📄", title:"Recurring Proposal", desc:"4–5 page O&M service proposal with service confirmation and pricing summary.", badge:"O&M Proposal", badgeClass:"badge-p" },
   { id:"project",    icon:"🏗️", title:"Project Proposal",   desc:"Full capital project proposal: scope, architecture, schedule, itemized pricing, and signature block.", badge:"CapEx Project", badgeClass:"badge-proj" },
+  { id:"watersolve", icon:"💧", title:"WaterSolve Proposal", desc:"WaterSolve dredging, dewatering and geotextile tube proposal or sales quote, in WaterSolve format.", badge:"WaterSolve", badgeClass:"badge-proj" },
   { id:"custom",     icon:"✏️", title:"Custom Document",    desc:"Freeform — describe exactly what you need. No predefined structure or required fields.", badge:"Freeform", badgeClass:"badge-o" },
 ];
 
@@ -512,7 +514,7 @@ async function readSpreadsheetAsText(file) {
 function buildParsePrompt(docType, pastedText, fileNames) {
   const allKeys = [
     ...PIPELINE_FIELDS,
-    ...(docType==="assessment" ? ASSESSMENT_FIELDS : docType==="proposal" ? PROPOSAL_FIELDS : docType==="project" ? PROJECT_PROPOSAL_FIELDS : OTHER_FIELDS),
+    ...(docType==="assessment" ? ASSESSMENT_FIELDS : docType==="proposal" ? PROPOSAL_FIELDS : docType==="project" ? PROJECT_PROPOSAL_FIELDS : docType==="watersolve" ? WS_PARSE_KEYS.map(key => ({ key })) : OTHER_FIELDS),
   ].map(f => f.key).filter(k => k !== 'generatedBy' && k !== 'pipeline');
   return `You are a data extraction assistant for Solution Group. Extract fields from the provided files/text.
 ${pastedText ? `\nPASTED TEXT:\n${pastedText}\n` : ""}
@@ -790,7 +792,7 @@ export default function App() {
         await loadEmailJS();
         await window.emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {
           client_name:       data.clientName || 'Unknown Client',
-          doc_type:          data.docType === 'project' ? 'Project Proposal' : data.docType === 'proposal' ? 'Recurring Proposal' : 'Assessment',
+          doc_type:          data.docType === 'project' ? 'Project Proposal' : data.docType === 'proposal' ? 'Recurring Proposal' : data.docType === 'watersolve' ? 'WaterSolve Proposal' : 'Assessment',
           deal_amount:       data.dealAmount || 'Not specified',
           pipeline:          data.pipeline || 'Not specified',
           sg_contact:        data.sgContactName || 'Ted Winkelman',
@@ -818,10 +820,11 @@ export default function App() {
     setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setAccumulatedInstructions(""); setLastDealId(null); setRevisionCount(0);
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
-      const defaultPipeline = type === "project" ? "Project" : type === "proposal" ? "Recurring" : "";
-      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [], sectionOrder: null, pipeline: defaultPipeline };
+      const defaultPipeline = type === "project" || type === "watersolve" ? "Project" : type === "proposal" ? "Recurring" : "";
+      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [], sectionOrder: null, pipeline: defaultPipeline,
+        ...(type === "watersolve" ? WS_DEFAULTS : {}) };
     });
-    setPage(type === 'assessment' || type === 'custom' ? 'form' : 'sections');
+    setPage(type === 'assessment' || type === 'custom' || type === 'watersolve' ? 'form' : 'sections');
   };
 
   const startIntake = (type) => {
@@ -920,6 +923,7 @@ export default function App() {
         ...ASSESSMENT_FIELDS,
         ...PROPOSAL_FIELDS,
         ...PROJECT_PROPOSAL_FIELDS,
+        ...WS_PARSE_KEYS.map(key => ({ key })),
       ].map(f => f.key).filter((k,i,a) => a.indexOf(k) === i) // dedupe
        .filter(k => k !== 'generatedBy' && k !== 'pipeline'); // never parse these from docs
 
@@ -930,7 +934,8 @@ ${files.length ? "Files: " + files.map(f=>f.name).join(", ") : ""}
 
 CRITICAL: Return ONLY a flat JSON object. Every value must be a plain string or number. No nested objects, no arrays, no null. Use empty string for not found.
 
-Include "suggestedDocType" — one of: "assessment", "proposal", "project"
+Include "suggestedDocType" — one of: "assessment", "proposal", "project", "watersolve"
+- "watersolve" = WaterSolve work: dredging, dewatering, geotextile tubes, polymer conditioning, sludge/lagoon/pond cleanouts, or any document on WaterSolve letterhead
 - "project" = capital project, equipment installation, one-time CapEx
 - "proposal" = recurring O&M service contract, monthly fee
 - "assessment" = site assessment, findings report, no pricing
@@ -953,7 +958,9 @@ FIELD MAPPING:
 - "projectLengthDays": project duration in days (1 week = 7 days, 1 month = 30 days)
 - "contractLengthDays": contract duration in days (1 month = 30 days, 1 year = 365 days)
 - "customerContactName": primary customer/client contact person full name
-- "customerContactEmail": primary customer/client contact email address`;
+- "customerContactEmail": primary customer/client contact email address
+WATERSOLVE-ONLY FIELDS (fill only when suggestedDocType is "watersolve"; otherwise use empty strings):
+${WS_PARSE_GUIDE}`;
 
       msgContent.push({ type:"text", text: prompt });
       const raw = await callClaude(msgContent, 2500);
@@ -983,15 +990,25 @@ FIELD MAPPING:
       });
 
       const suggested = extracted.suggestedDocType || "project";
-      const defaultPipeline = suggested === "project" ? "Project" : suggested === "proposal" ? "Recurring" : "";
+      const defaultPipeline = suggested === "project" || suggested === "watersolve" ? "Project" : suggested === "proposal" ? "Recurring" : "";
       merged.pipeline = merged.pipeline || defaultPipeline;
+      if (suggested === "watersolve") {
+        Object.entries(WS_DEFAULTS).forEach(([k, v]) => { if (!merged[k]) merged[k] = v; });
+        const items = parseWsItems(merged.wsLineItems);
+        merged.wsLineItems = JSON.stringify(items);
+        const total = wsItemsTotal(items);
+        if (total > 0) merged.dealAmount = "$" + total.toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 });
+        const days = ["wsSetupDays","wsDredgeDays","wsDemobDays"].reduce((t, k) => t + (Number(merged[k]) || 0), 0);
+        if (days > 0) merged.projectLengthDays = String(days);
+        merged.closeDate = merged.closeDate || (() => { const d = new Date(); d.setMonth(d.getMonth() + 3); return d.toISOString().split("T")[0]; })();
+      }
 
       setFormData(merged);
       setAiKeys(filled);
       setDocType(suggested);
       setParsed(true);
       // Go to section builder for proposals and projects, skip it for assessments
-      setPage(suggested === 'assessment' ? 'form' : 'sections');
+      setPage(suggested === 'assessment' || suggested === 'watersolve' ? 'form' : 'sections');
     } catch(e) {
       setParseErr("Parse failed: " + e.message);
     } finally {
@@ -1020,7 +1037,7 @@ FIELD MAPPING:
     setParsed(false);
   };
 
-  const docFields = docType==="assessment" ? ASSESSMENT_FIELDS : docType==="proposal" ? PROPOSAL_FIELDS : docType==="project" ? PROJECT_PROPOSAL_FIELDS : OTHER_FIELDS;
+  const docFields = docType==="assessment" ? ASSESSMENT_FIELDS : docType==="proposal" ? PROPOSAL_FIELDS : docType==="project" ? PROJECT_PROPOSAL_FIELDS : docType==="watersolve" ? WS_FIELDS : OTHER_FIELDS;
   const allFields = [...PIPELINE_FIELDS, ...docFields];
 
   // ── completion percentage across ALL fields (required + optional) ──
@@ -1101,15 +1118,17 @@ FIELD MAPPING:
   const validate = () => {
     const errs={};
     allFields.filter(f=>f.required && f.type !== "hidden").forEach(f=>{ if(!formData[f.key]?.toString().trim()) errs[f.key]=true; });
+    const needsItems = docType === "watersolve" && wsItemsTotal(parseWsItems(formData.wsLineItems)) <= 0;
+    if (needsItems) errs.wsLineItems = true;
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      const missingLabels = allFields.filter(f => f.required && f.type !== "hidden" && errs[f.key]).map(f => f.label);
+      const missingLabels = [...allFields.filter(f => f.required && f.type !== "hidden" && errs[f.key]).map(f => f.label), ...(needsItems ? ["Pricing line items (at least one priced item)"] : [])];
       const msg = missingLabels.length === 1
         ? `Please fill in the required field: ${missingLabels[0]}`
         : `Please fill in all required fields before generating:\n• ${missingLabels.join('\n• ')}`;
       setGenErr(msg);
       // Scroll to first error field
-      const firstKey = allFields.find(f => f.required && f.type !== "hidden" && errs[f.key])?.key;
+      const firstKey = allFields.find(f => f.required && f.type !== "hidden" && errs[f.key])?.key || (needsItems ? "wsLineItems" : null);
       if (firstKey) {
         const el = document.querySelector(`[data-field="${firstKey}"]`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1121,6 +1140,10 @@ FIELD MAPPING:
 
   const handleGenerate = async () => {
     if (!validate()) return;
+    if (docType === "watersolve" && !formData.wsProposalNumber) {
+      formData.wsProposalNumber = wsProposalNumber(formData.clientLegalName, formData.proposalDate);
+      setField("wsProposalNumber", formData.wsProposalNumber);
+    }
     setGenErr(""); setGenerating(true); setGenStep(0); setHubspotStatus(null);
     try {
       const content = [];
@@ -1314,7 +1337,7 @@ FIELD MAPPING:
             {f.options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ) : (
-          <input type={f.type||"text"} className={cls} placeholder={f.placeholder} value={formData[f.key]||""} onChange={e=>setField(f.key,e.target.value)} />
+          <input type={f.type||"text"} className={cls} placeholder={f.placeholder} value={formData[f.key]||""} onChange={e=>(f.onChange || (v=>setField(f.key,v)))(e.target.value)} />
         )}
         {f.help && <div style={{fontSize:11,color:"#9aa5b4",marginTop:3,fontStyle:"italic"}}>{f.help}</div>}
       </div>
@@ -1666,7 +1689,7 @@ FIELD MAPPING:
           <div className="form-main">
             <button className="form-back" onClick={()=>setPage("intake")}>← Back</button>
             <div className="form-title">
-              {docType==="assessment"?"Assessment":docType==="proposal"?"Recurring Proposal":docType==="project"?"Project Proposal":"Document"}
+              {docType==="assessment"?"Assessment":docType==="proposal"?"Recurring Proposal":docType==="project"?"Project Proposal":docType==="watersolve"?"WaterSolve Proposal":"Document"}
             </div>
             <div className="form-subtitle">
               {aiKeys.size > 0
@@ -1720,6 +1743,9 @@ FIELD MAPPING:
             </div>
 
             {/* DOC DETAILS */}
+            {docType==="watersolve" ? (
+              <WaterSolveForm formData={formData} setField={setField} renderField={renderField} errors={errors} aiKeys={aiKeys} />
+            ) : (
             <div className="section">
               <div className="section-title">
                 {docType==="assessment"?"Assessment Details":docType==="proposal"?"Proposal Details":docType==="project"?"Project Details":"Document Details"}
@@ -1732,6 +1758,7 @@ FIELD MAPPING:
                 <div key={f.key} style={{marginTop:12}}>{renderField(f)}</div>
               ))}
             </div>
+            )}
 
             {/* GENERATE */}
             <div className="gen-bar">

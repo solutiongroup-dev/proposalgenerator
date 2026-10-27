@@ -21,6 +21,8 @@ const {
   PageBreak, ImageRun, LevelFormat, TabStopType, TabStopPosition, SimpleField
 } = require('docx');
 
+const { buildWaterSolve, waterSolveConfigPrompt } = require('./watersolve');
+
 const API_KEY  = process.env.ANTHROPIC_API_KEY;
 const LOGO     = fs.readFileSync(path.join(__dirname, 'sg_logo.png'));
 
@@ -845,6 +847,7 @@ Apply these instructions with full reasoning ability:
       if (docType === 'proposal')        prompt = proposalConfigPrompt(formData, fileText);
       else if (docType === 'assessment') prompt = assessmentConfigPrompt(formData, fileText);
       else if (docType === 'project')    prompt = projectConfigPrompt(formData, fileText);
+      else if (docType === 'watersolve') prompt = waterSolveConfigPrompt(formData, fileText);
       else if (docType === 'custom') {
         // Custom: skip config extraction entirely — call Claude directly and build a simple doc
         const customInstruction = formData.customPrompt || formData.additionalInstructions || 'Generate a professional document.';
@@ -981,14 +984,15 @@ Return ONLY the document content — no preamble, no explanation.`
     let doc;
     if (docType === 'proposal')        doc = buildProposal(cfg);
     else if (docType === 'assessment') doc = buildAssessment(cfg);
+    else if (docType === 'watersolve') doc = buildWaterSolve(cfg, formData);
     else                               doc = buildProject(cfg);
 
     const buffer = await Packer.toBuffer(doc);
 
     const now = new Date();
     const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
-    const clientName = (cfg.client?.short_name || cfg.client?.name || 'Client').trim();
-    const projectDesc = (cfg.proposal_title || '')
+    const clientName = (cfg.client?.short_name || cfg.client?.name || formData?.clientShortName || formData?.clientLegalName || 'Client').trim();
+    const projectDesc = (cfg.proposal_title || formData?.projectTitle || '')
       .replace(/[-\u2013\u2014]/g, ' ')
       .replace(/[^a-zA-Z0-9\s]/g, '')
       .split(/\s+/).filter(Boolean).slice(0, 3).join(' ');

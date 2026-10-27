@@ -33,9 +33,9 @@ async function hubspotFetch(path, init) {
 async function uploadFile(buffer, filename) {
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: DOCX_MIME }), filename);
-  // HubSpot treats anything after the last dot in fileName as the extension,
-  // so "Client - 10.27" would be stored as a ".27" file. Keep the name dot-free.
-  form.append('fileName', filename.replace(/\.docx$/i, '').replace(/\./g, '-'));
+  // HubSpot takes the file type from whatever follows the last dot in fileName,
+  // so the name must end in .docx and contain no other dots ("10.27" became a ".27" file).
+  form.append('fileName', filename.replace(/\.docx$/i, '').replace(/\./g, '-') + '.docx');
   form.append('folderPath', FOLDER_PATH);
   // PRIVATE: only signed-in HubSpot users can open it; it is not a public link.
   // duplicateValidationStrategy NONE: each revision is kept as its own file.

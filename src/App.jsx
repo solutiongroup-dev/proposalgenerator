@@ -1195,10 +1195,13 @@ FIELD MAPPING:
       const now = new Date();
       const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
       const companyName = (formData.clientShortName || formData.clientLegalName || formData.clientName || "Client").trim();
+      const companyWords = new Set(companyName.toLowerCase().split(/\s+/));
       const projectDesc = (formData.projectTitle || formData.serviceDescription || "")
         .replace(/[-–—]/g, ' ')          // remove dashes/em dashes
         .replace(/[^a-zA-Z0-9\s]/g, '')  // remove special chars
-        .split(/\s+/).filter(Boolean).slice(0, 3).join(' ');   // max 3 words
+        .split(/\s+/).filter(Boolean)
+        .filter(w => !companyWords.has(w.toLowerCase()))   // titles often repeat the client name
+        .slice(0, 3).join(' ');          // max 3 words
       const filename = `${companyName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}.docx`;
       setGenStep(3);
       a.href=dlUrl; a.download=filename; a.click();

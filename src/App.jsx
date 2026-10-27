@@ -633,6 +633,15 @@ ${formData.additionalInstructions ? `\nADDITIONAL INSTRUCTIONS FROM USER: ${form
 INTAKE:\n${fields}${pasteNote}${fileNote}\nProfessional tone, markdown formatting, appropriate sections for the described purpose.`;
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 function downloadText(content, filename) {
   const blob = new Blob([content], { type:"text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -761,6 +770,7 @@ export default function App() {
   const [customGenerating, setCustomGenerating] = useState(false);
   const [showHelp,     setShowHelp]     = useState(false);
   const [skipHubspot,  setSkipHubspot]  = useState(false);
+  const [hubspotStatus, setHubspotStatus] = useState(null); // null | {state:'working'|'done'|'error', text}
   const emailTimerRef = useRef(null);
 
   const loadEmailJS = () => new Promise((res, rej) => {
@@ -1111,7 +1121,7 @@ FIELD MAPPING:
 
   const handleGenerate = async () => {
     if (!validate()) return;
-    setGenErr(""); setGenerating(true); setGenStep(0);
+    setGenErr(""); setGenerating(true); setGenStep(0); setHubspotStatus(null);
     try {
       const content = [];
       setGenStep(0);
@@ -1198,6 +1208,7 @@ FIELD MAPPING:
 
       // Fire HubSpot deal creation/update silently in background
       if (docType !== "assessment" && !skipHubspot) {
+        setHubspotStatus({ state:"working", text:"Saving deal and attaching document in HubSpot…" });
         fetch("/api/hubspot", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1228,8 +1239,26 @@ FIELD MAPPING:
           if (data?.dealId) {
             setLastDealId(data.dealId);
             console.log(`✓ HubSpot deal ${data.isNew ? 'created' : 'updated'}: ${data.dealName} (${data.dealId})`);
+            // Upload the .docx and attach it to the deal as a note
+            blobToBase64(blob)
+              .then(docBase64 => fetch("/api/hubspot-attach", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ dealId: data.dealId, filename, docBase64 }),
+              }))
+              .then(r => r.json().then(j => ({ ok: r.ok, j })))
+              .then(({ ok, j }) => {
+                if (!ok) throw new Error(j?.error || "Attachment failed");
+                console.log(`✓ Document attached to deal ${data.dealId} (file ${j.fileId})`);
+                setHubspotStatus({ state:"done", text:`Document attached to HubSpot deal "${data.dealName}"` });
+              })
+              .catch(e => {
+                console.warn('HubSpot attach failed:', e.message);
+                setHubspotStatus({ state:"error", text:`Deal ${data.isNew ? 'created' : 'updated'}, but the document could not be attached: ${e.message}` });
+              });
           } else {
             console.warn('HubSpot: no dealId', data);
+            setHubspotStatus({ state:"error", text:`HubSpot deal not saved: ${data?.error || 'no deal ID returned'}` });
           }
           // Schedule approval email — fires 10 min after last generation
           scheduleEmail({
@@ -1245,6 +1274,7 @@ FIELD MAPPING:
           });
         }).catch(e => {
           console.warn('HubSpot call failed:', e.message);
+          setHubspotStatus({ state:"error", text:`HubSpot deal not saved: ${e.message}` });
           // Still schedule email even if HubSpot fails
           scheduleEmail({
             docType,
@@ -1354,7 +1384,7 @@ FIELD MAPPING:
                   <div className="help-step-num">4</div>
                   <div className="help-step-content">
                     <h3>Generate & Download</h3>
-                    <p>Hit the Generate & Download button at the bottom. Claude writes the full document and it downloads to your device as a branded Word file. A deal is automatically created in HubSpot with the relevant fields populated.</p>
+                    <p>Hit the Generate & Download button at the bottom. Claude writes the full document and it downloads to your device as a branded Word file. A deal is automatically created in HubSpot with the relevant fields populated, and the Word file is attached to it.</p>
                     <div className="tip">💡 Not happy with the output? Use the revision box that appears after download to make targeted changes — "shorten the engineering scope" or "update the total to $380,000". For bigger changes, hit Start Over.</div>
                   </div>
                 </div>
@@ -1734,6 +1764,14 @@ FIELD MAPPING:
               <button className="btn-gen" onClick={handleGenerate} disabled={generating}>
                 ⬇ Generate & Download
               </button>
+              {hubspotStatus && (
+                <div style={{
+                  marginTop:10, fontSize:12, lineHeight:1.5,
+                  color: hubspotStatus.state === "error" ? "#991b1b" : hubspotStatus.state === "done" ? "#166534" : "#5a6577",
+                }}>
+                  {hubspotStatus.state === "done" ? "✓ " : hubspotStatus.state === "error" ? "⚠ " : ""}{hubspotStatus.text}
+                </div>
+              )}
             </div>
 
             {/* REVISION BOX — shown after successful download */}

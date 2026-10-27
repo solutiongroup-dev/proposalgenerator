@@ -1,7 +1,7 @@
 /**
  * SG Document Generator — HubSpot Integration
  * Route: POST /api/hubspot
- * Creates or updates deals. File attachment removed.
+ * Creates or updates deals. The document itself is attached by /api/hubspot-attach.
  */
 
 const https = require('https');

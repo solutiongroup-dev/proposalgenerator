@@ -364,7 +364,8 @@ function buildQuote(cfg, f, items, total) {
 // ── Entry points ──────────────────────────────────────────────────────────────
 function buildWaterSolve(cfg, formData) {
   const f = formData || {};
-  const items = parseLineItems(f.wsLineItems);
+  // A revision can change prices, so the config's line items win over the form's
+  const items = parseLineItems(Array.isArray(cfg.line_items) ? cfg.line_items : f.wsLineItems);
   const total = items.reduce((s, li) => s + li.amount, 0);
   return f.wsFormat === 'quote' ? buildQuote(cfg, f, items, total) : buildLetter(cfg, f, items, total);
 }

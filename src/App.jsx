@@ -763,9 +763,9 @@ export default function App() {
   const [revisions,    setRevisions]   = useState("");
   const [lastConfig,              setLastConfig]             = useState(null);
   const [lastFileContents,        setLastFileContents]        = useState([]);
-  const [accumulatedInstructions, setAccumulatedInstructions] = useState("");
+  const [revisionHistory,         setRevisionHistory]         = useState([]); // changes applied to the current document, oldest first
   const [lastDealId,   setLastDealId]  = useState(null);
-  const [revisionCount, setRevisionCount] = useState(0);
+
   const [customPrompt, setCustomPrompt] = useState("");
   const [customFiles,  setCustomFiles]  = useState([]);
   const [customErr,    setCustomErr]    = useState("");
@@ -817,7 +817,7 @@ export default function App() {
   const selectDoc = (type) => {
     setDocType(type); setErrors({});
     setParsed(false); setParseErr(""); setGenErr("");
-    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setAccumulatedInstructions(""); setLastDealId(null); setRevisionCount(0);
+    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
       const defaultPipeline = type === "project" || type === "watersolve" ? "Project" : type === "proposal" ? "Recurring" : "";
@@ -836,7 +836,7 @@ export default function App() {
     setDocType(null); setFormData({}); setErrors({});
     setPastedText(""); setFiles([]); setAiKeys(new Set());
     setParsed(false); setParseErr(""); setGenErr("");
-    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setAccumulatedInstructions(""); setLastDealId(null); setRevisionCount(0); setFormData(prev => {
+    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null); setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
       return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [] };
     });
@@ -1138,83 +1138,73 @@ ${WS_PARSE_GUIDE}`;
     return true;
   };
 
-  const handleGenerate = async () => {
-    if (!validate()) return;
+  // revisionText: a change request from the revision box. Without it this is a fresh generation.
+  const handleGenerate = async (revisionText) => {
+    const revision = typeof revisionText === "string" ? revisionText.trim() : "";
+    const isRevision = !!revision && lastConfig !== null;
+    if (!validate()) return false;
     if (docType === "watersolve" && !formData.wsProposalNumber) {
       formData.wsProposalNumber = wsProposalNumber(formData.clientLegalName, formData.proposalDate);
       setField("wsProposalNumber", formData.wsProposalNumber);
     }
     setGenErr(""); setGenerating(true); setGenStep(0); setHubspotStatus(null);
     try {
-      const content = [];
-      setGenStep(0);
-      // Extract text content from files to send to the server
-      const fileContents = [];
-      for (const f of files) {
-        if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
-          const text = await readDocxAsText(f);
-          fileContents.push(`[Document: ${f.name}]\n${text}`);
-        } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
-          const text = await readSpreadsheetAsText(f);
-          fileContents.push(`[Spreadsheet: ${f.name}]\n${text}`);
-        } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="text/plain") {
-          const text = await f.text();
-          fileContents.push(`[File: ${f.name}]\n${text}`);
+      // Revisions reuse the files read for the first version, so the editor sees the same sources
+      let fileContents = isRevision ? lastFileContents : [];
+      if (!fileContents.length) {
+        for (const f of files) {
+          if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
+            const text = await readDocxAsText(f);
+            fileContents.push(`[Document: ${f.name}]\n${text}`);
+          } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
+            const text = await readSpreadsheetAsText(f);
+            fileContents.push(`[Spreadsheet: ${f.name}]\n${text}`);
+          } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="text/plain") {
+            const text = await f.text();
+            fileContents.push(`[File: ${f.name}]\n${text}`);
+          }
         }
-      }
-      setGenStep(1);
-      // Always do a full regeneration — use stored file contents on revision so
-      // original context is preserved. Accumulate all instructions over time.
-      const isRevision = lastConfig !== null && revisionCount > 0;
-      const effectiveFileContents = isRevision ? lastFileContents : fileContents;
-
-      // Store file contents after first extraction so revisions can reuse them
-      if (!isRevision && fileContents.length > 0) {
         setLastFileContents(fileContents);
       }
-
-      // Build accumulated instructions — stack new instructions on top of previous ones
-      const newInstructions = formData.additionalInstructions || "";
-      const revisionsText = isRevision && revisionCount > 0
-        ? [accumulatedInstructions, newInstructions].filter(Boolean).join("\n\nAdditionally: ")
-        : newInstructions;
-
-      if (newInstructions && !newInstructions.startsWith("REVISION REQUEST")) {
-        setAccumulatedInstructions(revisionsText);
-      }
-
-      // Build effective formData with accumulated instructions
-      const effectiveFormData = {
-        ...formData,
-        additionalInstructions: revisionsText,
-      };
+      setGenStep(1);
+      const nextHistory = isRevision ? [...revisionHistory, revision] : [];
 
       const resp = await fetch("/api/generate-document", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           docType,
-          formData: effectiveFormData,
+          formData,
           pastedText,
-          fileContents: effectiveFileContents,
+          fileContents,
           optionalSections: formData.optionalSections || [],
           sectionOrder: formData.sectionOrder || null,
+          ...(isRevision ? { previousConfig: lastConfig, revisionInstructions: revision, revisionHistory: nextHistory } : {}),
         }),
       });
       setGenStep(2);
-      if (!resp.ok) {
-        const err = await resp.json().catch(()=>({}));
-        throw new Error(err?.error || `Server error ${resp.status}`);
+      const result = await resp.json().catch(() => ({}));
+      if (!resp.ok || !result.docBase64) throw new Error(result?.error || `Server error ${resp.status}`);
+      const cfg = result.config || null;
+      setLastConfig(cfg);
+      setRevisionHistory(nextHistory);
+
+      // A revision can change prices: keep the form and the HubSpot deal amount in step
+      const fmtMoney = n => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 });
+      if (docType === "watersolve" && Array.isArray(cfg?.line_items)) {
+        const items = cfg.line_items.map(({ amount, ...li }) => li);
+        setField("wsLineItems", JSON.stringify(items));
+        const t = wsItemsTotal(items);
+        if (t > 0) { formData.dealAmount = fmtMoney(t); setField("dealAmount", formData.dealAmount); }
+      } else if (docType === "project" && isRevision && Number(cfg?.pricing?.total) > 0) {
+        formData.dealAmount = fmtMoney(cfg.pricing.total); setField("dealAmount", formData.dealAmount);
       }
-      // Store the config that was used to generate this document
-      const configHeader = resp.headers.get('X-Document-Config');
-      if (configHeader) {
-        try { setLastConfig(JSON.parse(atob(configHeader))); } catch(e) {}
-      }
-      const blob = await resp.blob();
+
+      const bytes = Uint8Array.from(atob(result.docBase64), c => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       const dlUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      // Filename: {Company} {Location} {3-word description} - {M.DD}
+      // Filename: {Company} {3-word description} - {M.DD}, plus v2, v3... for revisions
       const now = new Date();
       const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
       const companyName = (formData.clientShortName || formData.clientLegalName || formData.clientName || "Client").trim();
@@ -1225,7 +1215,7 @@ ${WS_PARSE_GUIDE}`;
         .split(/\s+/).filter(Boolean)
         .filter(w => !companyWords.has(w.toLowerCase()))   // titles often repeat the client name
         .slice(0, 3).join(' ');          // max 3 words
-      const filename = `${companyName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}.docx`;
+      const filename = `${companyName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}${nextHistory.length ? ` v${nextHistory.length + 1}` : ''}.docx`;
       setGenStep(3);
       a.href=dlUrl; a.download=filename; a.click();
       URL.revokeObjectURL(dlUrl);
@@ -1313,9 +1303,11 @@ ${WS_PARSE_GUIDE}`;
           });
         });
       }
+      return true;
     } catch(e) {
       setGenerating(false);
-      setGenErr(`Generation failed: ${e.message}`);
+      setGenErr(`${isRevision ? "Revision" : "Generation"} failed: ${e.message}`);
+      return false;
     }
   };
 
@@ -1809,13 +1801,14 @@ ${WS_PARSE_GUIDE}`;
               <div className="revision-box">
                 <h4>Need to make some changes?</h4>
                 <p>
-                  Describe what you want changed. This triggers a full regeneration using all your original files plus everything you've specified so far — the more detail the better.
-                  {revisionCount > 0 && <span style={{color:"#9aa5b4"}}> ({revisionCount} revision{revisionCount > 1 ? "s" : ""} made)</span>}
+                  Describe what to change and Claude edits this version directly: rewrite or shorten sections, change prices or dates, add or remove sections, adjust tone. Anything you don't mention stays as it is.
                 </p>
 
-                {revisionCount >= 2 && (
+                {revisionHistory.length > 0 && (
                   <div style={{background:"#f0f5ff",border:"1px solid #c8d4e8",borderRadius:6,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#2B579A",lineHeight:1.6}}>
-                    <strong>Note:</strong> Each regeneration builds on all previous instructions. If the document is moving in the wrong direction entirely, use Start Over to reset.
+                    <strong>Changes applied to this version:</strong>
+                    <ol style={{margin:"4px 0 0 18px"}}>{revisionHistory.map((r, i) => <li key={i}>{r}</li>)}</ol>
+                    <div style={{color:"#7a8a9a",marginTop:4}}>Changed the form instead? Use Generate &amp; Download for a fresh version, or Start Over to reset.</div>
                   </div>
                 )}
 
@@ -1835,8 +1828,7 @@ ${WS_PARSE_GUIDE}`;
                       setRevisions("");
                       setLastConfig(null);
                       setLastFileContents([]);
-                      setAccumulatedInstructions("");
-                      setRevisionCount(0);
+                      setRevisionHistory([]);
                       setGenErr("");
                       if (emailTimerRef.current) clearTimeout(emailTimerRef.current);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1848,20 +1840,9 @@ ${WS_PARSE_GUIDE}`;
                   <button
                     className="btn-revise"
                     disabled={!revisions.trim() || generating}
-                    onClick={() => {
-                      const revisionText = revisions.trim();
-                      const todayStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-                      // Stack new instructions on accumulated context
-                      const newInstructions = accumulatedInstructions
-                        ? accumulatedInstructions + "\n\nAdditional revision: " + revisionText + " (Today's date: " + todayStr + ")"
-                        : revisionText + " (Today's date: " + todayStr + ")";
-                      setAccumulatedInstructions(newInstructions);
-                      setFormData(prev => ({ ...prev, additionalInstructions: newInstructions }));
-                      setRevisions("");
-                      setGenerated(false);
-                      setRevisionCount(prev => prev + 1);
-                      // Small delay to let state commit then call handleGenerate
-                      setTimeout(() => handleGenerate(), 50);
+                    onClick={async () => {
+                      // Clear the box only once the change made it into a document
+                      if (await handleGenerate(revisions)) setRevisions("");
                     }}
                   >
                     ↻ Regenerate with Changes

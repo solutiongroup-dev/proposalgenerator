@@ -21,7 +21,7 @@ const {
   PageBreak, ImageRun, LevelFormat, TabStopType, TabStopPosition, SimpleField
 } = require('docx');
 
-const { buildWaterSolve, waterSolveConfigPrompt } = require('./watersolve');
+const { buildWaterSolve, waterSolveConfigPrompt, parseLineItems } = require('./watersolve');
 
 const API_KEY  = process.env.ANTHROPIC_API_KEY;
 const LOGO     = fs.readFileSync(path.join(__dirname, 'sg_logo.png'));
@@ -78,6 +78,60 @@ The dashboard surfaces Executive Attention Items, rules-based exceptions that fl
   },
 };
 
+// ── Dates (Vercel runs in UTC; Solution Group is in Indianapolis) ─────────────
+const TZ = 'America/Indiana/Indianapolis';
+const todayLong  = () => new Date().toLocaleDateString('en-US', { timeZone: TZ, year: 'numeric', month: 'long', day: 'numeric' });
+const todayShort = () => {
+  const [m, d] = new Date().toLocaleDateString('en-US', { timeZone: TZ, month: 'numeric', day: '2-digit' }).split('/');
+  return `${m}.${d}`;
+};
+
+// ── Commercial statements: written once, here, never by Claude ───────────────
+const CANONICAL_TAX      = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
+const CANONICAL_VALIDITY = 'This proposal is valid for 30 days from the date above.';
+const TAX_RE      = /\btax(es|ed)?\b/i;
+const VALIDITY_RE = /\b(proposal|quote|quotation|pricing|offer)\b[^.]*\bvalid\b|\bvalid (for|through|until)\b[^.]*\d+\s*days?\b/i;
+const MARKUP_RE   = /\b(mark-?up|margin)\b|\d+(\.\d+)?\s*%[^.]*\b(contingency|markup|margin)\b|\bcontingency\b[^.]*\d+(\.\d+)?\s*%/i;
+const LEADTIME_RE = /\blead.?times?\b|\bpricing\b[^.]*\bbudgetary\b/i;
+
+// Remove whole sentences that match from a paragraph
+const stripSentences = (text, re) => typeof text !== 'string' ? text
+  : (text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text]).filter(sn => !re.test(sn)).join('').trim();
+
+/**
+ * Enforce one tax statement and one validity statement, both in the Commercial Summary
+ * pricing notes, and keep markup/contingency percentages out of the document.
+ * Applies to every text field Claude writes, including sections a revision added.
+ * When a revision explicitly asks to change tax or validity wording (allowCustom),
+ * Claude's pricing_notes are kept as written, deduplicated.
+ */
+function enforceCommercialRules(cfg, allowCustom = false) {
+  const both = new RegExp(`${TAX_RE.source}|${VALIDITY_RE.source}`, 'i');
+  const scrub = v => typeof v === 'string' ? stripSentences(v, both)
+    : Array.isArray(v) ? v.filter(x => typeof x !== 'string' || !both.test(x)).map(scrub)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)])) : v;
+
+  for (const key of ['sections', 'additional_sections', 'intro_text', 'service_confirmation_text', 'executive_summary']) {
+    if (cfg[key]) cfg[key] = scrub(cfg[key]);
+  }
+  const bulletOk = b => typeof b !== 'string' || (!both.test(b) && !MARKUP_RE.test(b));
+  if (Array.isArray(cfg.assumptions_exclusions)) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(bulletOk);
+  if (Array.isArray(cfg.next_steps))             cfg.next_steps             = cfg.next_steps.filter(bulletOk);
+
+  const pricing = cfg.pricing = cfg.pricing || {};
+  if (Array.isArray(pricing.contingency_notes)) pricing.contingency_notes = pricing.contingency_notes.filter(bulletOk);
+  const notes = Array.isArray(pricing.pricing_notes) ? pricing.pricing_notes.filter(n => typeof n === 'string') : [];
+  if (allowCustom) {
+    const firstTax = notes.find(n => TAX_RE.test(n)), firstValid = notes.find(n => VALIDITY_RE.test(n));
+    pricing.pricing_notes = [firstTax || CANONICAL_TAX, firstValid || CANONICAL_VALIDITY,
+      ...notes.filter(n => !both.test(n) && !MARKUP_RE.test(n) && !LEADTIME_RE.test(n))];
+  } else {
+    pricing.pricing_notes = [CANONICAL_TAX, CANONICAL_VALIDITY,
+      ...notes.filter(n => !both.test(n) && !MARKUP_RE.test(n) && !LEADTIME_RE.test(n))];
+  }
+  return cfg;
+}
+
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 const sp  = (before = 0, after = 120) => ({ before, after });
 const cb  = { style: BorderStyle.SINGLE, size: 1, color: BGRAY };
@@ -86,7 +140,8 @@ const nb  = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 const noBorders = { top: nb, bottom: nb, left: nb, right: nb };
 const mg  = { top: 80, bottom: 80, left: 120, right: 120 };
 const fmt = (n, cfg) => {
-  if (n == null || n === 0) return '[TBD]';
+  if (n == null || n === '') return '';
+  if (Number(n) === 0) return 'Included';
   const sym = cfg?.currency_symbol || '$';
   return sym + Number(n).toLocaleString('en-US');
 };
@@ -170,8 +225,7 @@ function coverPage(cfg) {
     ...(hasFullClientContact ? [new Paragraph({ spacing: sp(0, 160), children: [new TextRun({ text: `${c.site_contact}${c.site_contact_title ? ', ' + c.site_contact_title : ''}`, size: 22, color: GRAY, font: 'Calibri' })] })] : []),
     new Paragraph({ spacing: sp(0, 40), children: [new TextRun({ text: 'Prepared by:', bold: true, size: 20, color: GRAY, font: 'Calibri' })] }),
     new Paragraph({ spacing: sp(0, 40), children: [new TextRun({ text: sgLine, size: 22, color: GRAY, font: 'Calibri' })] }),
-    new Paragraph({ spacing: sp(0, 40), children: [new TextRun({ text: `Date: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}`, size: 22, color: GRAY, font: 'Calibri' })] }),
-    new Paragraph({ spacing: sp(0, 40), children: [new TextRun({ text: 'Valid for 30 days from date above.', size: 18, italic: true, color: '888888', font: 'Calibri' })] }),
+    new Paragraph({ spacing: sp(0, 40), children: [new TextRun({ text: `Date: ${cfg.proposal_date || cfg.date || todayLong()}`, size: 22, color: GRAY, font: 'Calibri' })] }),
     pb()
   ];
 }
@@ -180,17 +234,6 @@ function coverPage(cfg) {
 function buildProposal(cfg) {
   const pricing = cfg.pricing || {};
   const lineItems = pricing.line_items || [];
-
-  // Enforce single canonical tax and validity statements — identical to buildProject
-  const canonicalTaxP = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
-  const canonicalValidityP = 'This proposal is valid for 30 days from the date above.';
-  const taxReP = /(sales tax|tax.*not included|tax.*included|tax.*added|proposal.*valid|valid.*\d+ days)/i;
-  const markupReP = /(contingency|markup|margin|mark.?up|\d+%.*applied|\d+%.*markup)/i;
-  const leadTimeReP = /(lead.?time|\d+.*weeks.*pending|pricing.*budgetary)/i;
-  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxReP.test(b) && !markupReP.test(b));
-  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxReP.test(b) && !markupReP.test(b));
-  const otherNotesP = (pricing.pricing_notes || []).filter(n => !taxReP.test(n) && !markupReP.test(n) && !leadTimeReP.test(n));
-  pricing.pricing_notes = [canonicalTaxP, canonicalValidityP, ...otherNotesP];
 
   const pricingHeaderRow = new TableRow({
     tableHeader: true,
@@ -245,7 +288,7 @@ function buildProposal(cfg) {
       new Table({ width: { size: 9360, type: WidthType.DXA }, columnWidths: [5400, 1980, 1980], rows: [pricingHeaderRow, ...pricingLineRows, totalRow] }),
       ...spacer(1),
       body('Fees adjust annually by the greater of 3% or the annualized regional CPI.', { italic: true }),
-      body('This proposal is valid for 30 days from the date above.', { italic: true }),
+      ...(pricing.pricing_notes || []).map(n => body(n, { italic: true })),
       ...spacer(2),
     ],
     assumptions: () => [
@@ -413,17 +456,6 @@ function buildProject(cfg) {
   const c = cfg.client || {};
   const sg = cfg.sg_signer || {};
 
-  // Enforce single canonical tax and validity statements — strip any duplicates
-  const canonicalTax = 'Sales tax is not included in the investment figures above and will be added by Solution Group Accounting.';
-  const canonicalValidity = 'This proposal is valid for 30 days from the date above.';
-  const taxRe = /(sales tax|tax.*not included|tax.*included|proposal.*valid|valid.*\d+ days)/i;
-  const markupRe = /(contingency|markup|margin|mark.?up|\d+%.*applied|\d+%.*markup)/i;
-  const leadTimeRe = /(lead.?time|lead time|\d+.*weeks.*pending|pricing.*budgetary)/i;
-  if (cfg.assumptions_exclusions) cfg.assumptions_exclusions = cfg.assumptions_exclusions.filter(b => !taxRe.test(b) && !markupRe.test(b));
-  if (cfg.next_steps) cfg.next_steps = cfg.next_steps.filter(b => !taxRe.test(b) && !markupRe.test(b));
-  const otherPricingNotes = (pricing.pricing_notes || []).filter(n => !taxRe.test(n) && !markupRe.test(n) && !leadTimeRe.test(n));
-  pricing.pricing_notes = [canonicalTax, canonicalValidity, ...otherPricingNotes];
-
   // Pricing table — 2 columns: Cost Category | Amount
   const pricingHeaderRow = new TableRow({ tableHeader: true, children: [
     new TableCell({ borders: brd, width: { size: 7200, type: WidthType.DXA }, shading: { fill: BLUE, type: ShadingType.CLEAR }, margins: mg,
@@ -518,7 +550,6 @@ function buildProject(cfg) {
       ...(pricing.contingency_notes || []).map(n => body(n, { italic: true })),
       ...(pricing.pricing_notes || []).map(n => body(n, { italic: true })),
       body('Standard Solution Group progress billing terms apply: deposit at signing, progress billing through installation, final balance at substantial completion.', { italic: true }),
-      body('This proposal is valid for 30 days from the date above. Sales tax is added by Solution Group Accounting on all estimates.', { italic: true }),
       ...spacer(2),
     ],
     timeline: () => timeline.length ? [
@@ -584,7 +615,7 @@ function buildProject(cfg) {
 }
 
 // ── Claude API call ───────────────────────────────────────────────────────────
-function callClaude(messages, maxTokens = 4096) {
+function callClaude(messages, maxTokens = 8192) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages });
     const req = https.request({
@@ -597,6 +628,7 @@ function callClaude(messages, maxTokens = 4096) {
         try {
           const parsed = JSON.parse(data);
           if (parsed.error) return reject(new Error(parsed.error.message));
+          if (parsed.stop_reason === 'max_tokens') return reject(new Error('The document was too long to finish in one pass. Try a shorter request or fewer source files.'));
           resolve(parsed.content.map(b => b.text || '').join('\n'));
         } catch (e) { reject(e); }
       });
@@ -608,6 +640,23 @@ function callClaude(messages, maxTokens = 4096) {
 }
 
 // ── Config extraction prompts ─────────────────────────────────────────────────
+// Rules every Solution Group proposal shares. Tax and validity statements are added
+// by code (enforceCommercialRules), so Claude is told never to write them.
+const SHARED_RULES = `- Always write "Solution Group" in full, never "SG".
+- Never use placeholders such as [To be confirmed] or TBD. Omit anything you cannot fill from the data.
+- Never use em dashes. Use commas or periods.
+- Never write sales tax, tax-exempt, or proposal-validity language anywhere. Those statements are inserted automatically in the Commercial Summary.
+- Never disclose markup, margin, or contingency percentages. Bake them into prices silently.
+- Executive audience: the reader should understand the whole proposal in under 10 minutes. Detailed scope lives in the assessment document; reference it instead of reproducing it.
+- REDUNDANCY RULE: every fact, dollar amount, date, and commitment appears exactly once, in the section a reader would look for it.
+  * Dollar amounts and fees: Commercial Summary only.
+  * Scope boundaries and exclusions: Key Assumptions & Exclusions only.
+  * Action items, procurement steps, lead times, purchase orders: Next Steps only.
+  * Third parties (engineering firms, subcontractors): name once, where their work is described.
+  * Dates: state once; elsewhere say "the date above".
+  * If a fact fits two sections, keep it in the best one and cross-reference ("see Commercial Summary").
+  * Before returning, scan every section for any subject that appears twice and delete the weaker copy.`;
+
 function proposalConfigPrompt(formData, fileText) {
   const userInstructions = formData.additionalInstructions ? `
 MANDATORY USER INSTRUCTIONS — apply these before anything else. These override defaults:
@@ -616,25 +665,18 @@ ${formData.additionalInstructions}
   return `You are a senior Solution Group proposal writer. Using the provided data, produce a complete JSON config for a branded recurring service proposal.
 ${userInstructions}
 RULES:
-- Always write "Solution Group" in full — never abbreviate as "SG"
-- Never use [To be confirmed] or placeholders — omit fields you cannot fill
-- Never expose markup as a line item — bake it into pricing
-- Apply ALL user instructions above precisely and completely before returning the config
-- If instructions ask for a new section, add it as a key in the JSON and populate it fully
-- If instructions ask for currency change, convert all amounts and set currency_symbol
-- REDUNDANCY RULE: Every fact, term, dollar amount, or commitment must appear exactly once, in the section where a reader would most naturally look for it. Specifically:
-  * Recurring or subscription fees: state amount, coverage, and timing once only — in the Commercial Summary line item. Do not repeat in Introduction, Service Confirmation, Assumptions, or Next Steps.
-  * Sales tax treatment and proposal validity period: appear once only in the Commercial Summary. Do not restate elsewhere.
-  * Dates: reference a date once as the source of truth; use "the date above" or "the start date noted in the Commercial Summary" for any other mention rather than restating the literal date.
-  * Procedural commitments (lead times, purchase orders, authorization steps): consolidate into Next Steps only — do not preview earlier and repeat there.
-  * If a fact is relevant to two sections, place it in the section where it belongs and cross-reference from the other ("see Commercial Summary") rather than restating it.
-  * Before finalizing, mentally scan all sections for any phrase, dollar amount, or commitment that appears more than once and consolidate.
+${SHARED_RULES}
+- Apply ALL user instructions above precisely and completely before returning the config.
+- If instructions ask for a currency change, convert all amounts and set currency_symbol.
+- Length: Introduction 1 short paragraph. Service Confirmation 2-3 sentences. Assumptions & Exclusions 4-8 bullets. Next Steps 3-5 bullets.
+- For operator-staffed O&M (labor in scope), Assumptions include: out-of-scope work is billed back at cost plus 10% with written approval above $5,000, and overtime is billed at $125/hr with a 4-hour minimum. Default term is 36 months with 12-month auto-renewal and 60-day notice unless the data says otherwise.
+- Line item names must be client-facing (e.g. Labor, Technology Fee, OptiClear Fee, Corporate Support). Never show internal cost build-ups.
 
 FORM DATA: ${JSON.stringify(formData)}
 ${fileText ? `FILE CONTENT:
 ${fileText}` : ''}
 
-Today's date is: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}. Use this as the proposal date if none is specified.
+Today's date is: ${todayLong()}. Use this as the proposal date if none is specified.
 
 Return ONLY valid JSON (no markdown, no preamble) matching this structure:
 {
@@ -659,7 +701,7 @@ Return ONLY valid JSON (no markdown, no preamble) matching this structure:
 }
 
 Extract everything available. For client/SG contacts: use what you have, leave fields as empty string if unknown.
-IMPORTANT: Do NOT add any additional_sections or section_order — only return the fields listed above.`;
+If the user instructions ask for an extra section, add it under "additional_sections": { "<snake_case_key>": "paragraphs separated by blank lines, or an array of bullets" } and list every section key in order under "section_order". Otherwise omit both.`;
 }
 
 function assessmentConfigPrompt(formData, fileText) {
@@ -676,7 +718,7 @@ RULES:
 FORM DATA: ${JSON.stringify(formData)}
 ${fileText ? `FILE CONTENT:\n${fileText}` : ''}
 
-Today's date is: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}. Use this as the proposal date if none is specified.
+Today's date is: ${todayLong()}. Use this as the proposal date if none is specified.
 
 Return ONLY valid JSON (no markdown, no preamble) matching this structure:
 {
@@ -706,9 +748,7 @@ ${formData.additionalInstructions}
 ` : '';
   return `You are a senior Solution Group proposal writer. Using the provided data, produce a complete JSON config for a branded capital project proposal.
 ${userInstructions}
-DOCUMENT STRUCTURE (follow exactly unless user instructions say otherwise):
-
-SECTION STRUCTURE (follow exactly):
+SECTION STRUCTURE (follow exactly unless user instructions say otherwise):
 1. Proposal Introduction — 1-2 short paragraphs, NO equipment lists, reference assessment doc for detail
 2. Project Confirmation — 2 sentences confirming scope is in the assessment document
 3. Engineering Scope Summary — narrative by concept (what the system does), NOT by equipment line item
@@ -718,31 +758,19 @@ SECTION STRUCTURE (follow exactly):
 7. Next Steps — brief bullets
 
 CRITICAL RULES:
-- Always write "Solution Group" in full — NEVER abbreviate as "SG"  
-- Never use [To be confirmed] or any placeholder — use only available info; omit unknown fields
-- Never expose markup/margin as a line item — bake it into category totals silently
+${SHARED_RULES}
 - No monthly/annual columns — project proposals have a single total investment figure
 - Cover page: use what's available; minimal is fine; never leave blanks
 - Pricing MUST be rolled up into max 4 categories — never individual line items
 - Engineering scope = 2-3 short paragraphs max, what the system accomplishes and why, NOT a parts list. Concise and executive-readable.
 - Timeline: ONLY include if the uploaded documents explicitly contain a schedule with specific timeframes (e.g. "Weeks 1-4", "Phase 1: 3 weeks", "Start: March 1"). Do NOT infer, estimate, or generate a timeline from project scope. Do NOT include a timeline just because there is a start date or project length. If no explicit schedule with phases or week ranges exists in the source material, return timeline as null or an empty array.
 - Contact names: only include if you have both first AND last name. Single names (e.g. "Gram") must be omitted entirely from contacts.
-- Never use em dashes anywhere. Use commas or periods instead.
-- REDUNDANCY RULE: Every fact, term, dollar amount, or commitment must appear exactly once. Before writing each section, check whether that content already appeared earlier. Specifically:
-  * Scope exclusions and separate-quote commitments: state once in Key Assumptions. Do not preview in Introduction or Engineering Scope and then repeat in Assumptions and Next Steps. If it is an action item it goes in Next Steps; if it is a boundary/exclusion it goes in Assumptions. Not both and not four times.
-  * Third-party firms (engineering firms, subcontractors): name them once in Engineering Scope with context. Do not restate in Assumptions as a generic bullet.
-  * Lead times: state once in Next Steps as part of the procurement action item. Never in Commercial Summary pricing notes.
-  * Dollar amounts and costs: appear once in Commercial Summary. Do not restate in any other section.
-  * Recurring or subscription fees: state once in Commercial Summary line item only.
-  * Sales tax and proposal validity: once each in Commercial Summary pricing notes only.
-  * Dates: reference once; use "the date above" or "as noted in Section X" elsewhere.
-  * When user instructions introduce a new commitment (e.g. "provide stamped drawings"), place it in exactly one section — Assumptions if it is a scope boundary, Next Steps if it is an action. Do not echo it into Introduction, Engineering Scope, and both Assumptions and Next Steps.
-  * After drafting, scan every section for any sentence containing the same subject as a sentence in another section. If found, keep the one in the most appropriate section and delete the rest.
+- When user instructions introduce a new commitment (e.g. "provide stamped drawings"), place it in exactly one section: Assumptions if it is a scope boundary, Next Steps if it is an action.
 
 FORM DATA: ${JSON.stringify(formData)}
 ${fileText ? `FILE CONTENT:\n${fileText}` : ''}
 
-Today's date is: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}. Use this as the proposal date if none is specified.
+Today's date is: ${todayLong()}. Use this as the proposal date if none is specified.
 
 Return ONLY valid JSON (no markdown, no preamble) matching this structure:
 {
@@ -764,7 +792,7 @@ Return ONLY valid JSON (no markdown, no preamble) matching this structure:
       { "name": "OptiClear Remote Management", "amount": number }
     ],
     "contingency_notes": ["string — note any line items that are budgetary/pending"],
-    "pricing_notes": ["string — e.g. sales tax note, validity period"]
+    "pricing_notes": ["optional: other client-facing pricing notes only (no tax, validity, lead time, or markup language)"]
   },
   "timeline": [{ "timeframe": "Weeks 1-4", "activity": "Parts procurement" }] or null,
   "include_signature": true or false,
@@ -787,9 +815,99 @@ PRICING GUIDANCE:
 - Category amounts must use the marked-up sale price figures from the source data. If a second contingency markup is applied on top of line item margins (common in SG trackers), apply that same multiplier to each category so they sum to the final total.
 - NEVER invent, estimate, or fabricate any dollar amount. If a category has no line items with dollar values, omit it.
 - NEVER mention markup percentage, contingency percentage, or margin anywhere in the document — not in pricing notes, assumptions, engineering scope, or anywhere else. The markup is silently baked into the numbers.
-- pricing_notes: exactly ONE tax statement and ONE validity statement. Nothing else. No lead times, no markup disclosure, no contingency language.
 - Lead times belong in Next Steps only — never in Commercial Summary pricing notes.
 - If the source data contains a fact (lead time, cost, commitment) that you include in one section, do not repeat it in any other section. Cross-reference with "see Commercial Summary" or "as noted above" instead of restating.`;
+}
+
+// ── Sections chosen in the section builder (first generation only) ───────────
+const DEFAULT_ORDER = {
+  proposal: ['introduction','service_confirmation','commercial_summary','assumptions','next_steps'],
+  project:  ['introduction','project_confirmation','engineering_scope','commercial_summary','timeline','assumptions','next_steps'],
+};
+const OPTIONAL_AFTER = { opticlear: 'commercial_summary', sg_academy: 'assumptions', safety: 'assumptions', kpi_reporting: 'assumptions' };
+
+function applySectionChoices(cfg, formData) {
+  const selected = formData?.optionalSections || [];
+  const clientName = cfg.client?.short_name || cfg.client?.name || 'the client';
+  // Keep a section Claude added only when the user's instructions asked for one
+  const requested = formData?.additionalInstructions?.trim()
+    ? Object.entries(cfg.additional_sections || {}).filter(([k, v]) => !OPTIONAL_SECTION_CONTENT[k] && v && (typeof v === 'string' ? v.trim() : v.length))
+    : [];
+  const claudeOrder = Array.isArray(cfg.section_order) ? cfg.section_order : [];
+  cfg.additional_sections = Object.fromEntries(requested);
+  selected.forEach(key => {
+    const def = OPTIONAL_SECTION_CONTENT[key];
+    if (def) cfg.additional_sections[key] = def.content.replace(/CLIENT_NAME/g, clientName);
+  });
+  if (formData?.sectionOrder?.length) {
+    cfg.section_order = formData.sectionOrder;           // the section builder is the source of truth
+  } else if (selected.length) {
+    const order = [...(DEFAULT_ORDER[formData?.docType] || DEFAULT_ORDER[cfg.sections?.service_confirmation ? 'proposal' : 'project'])];
+    selected.forEach(key => {
+      if (!cfg.additional_sections[key] || order.includes(key)) return;
+      const idx = order.indexOf(OPTIONAL_AFTER[key] || 'commercial_summary');
+      idx === -1 ? order.push(key) : order.splice(idx + 1, 0, key);
+    });
+    cfg.section_order = order;
+  } else if (requested.length) {
+    cfg.section_order = [...(DEFAULT_ORDER[formData?.docType] || DEFAULT_ORDER.project)];
+  } else {
+    delete cfg.section_order;
+  }
+  // Place requested extra sections where Claude put them, else before Next Steps
+  requested.forEach(([key]) => {
+    if (cfg.section_order.includes(key)) return;
+    const after = claudeOrder[claudeOrder.indexOf(key) - 1];
+    const idx = after && cfg.section_order.includes(after) ? cfg.section_order.indexOf(after) + 1
+      : cfg.section_order.includes('next_steps') ? cfg.section_order.indexOf('next_steps') : cfg.section_order.length;
+    cfg.section_order.splice(idx, 0, key);
+  });
+}
+
+// ── Revision prompt: edit the existing document as the user asks ─────────────
+const REVISABLE = {
+  proposal:   'sections.introduction, sections.service_confirmation, pricing (monthly_total, annual_total, line_items[{description, monthly}]), assumptions_exclusions[], next_steps[], include_signature, additional_sections, section_order. Built-in section keys: introduction, service_confirmation, commercial_summary, assumptions, next_steps.',
+  project:    'sections.introduction, sections.project_confirmation, sections.engineering_scope, pricing (total, categories[{name, amount}], contingency_notes[], pricing_notes[]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, section_order. Built-in section keys: introduction, project_confirmation, engineering_scope, commercial_summary, timeline, assumptions, next_steps.',
+  assessment: 'executive_summary, site_overview, regulatory, systems[{name, current_state, findings[], risks[], recommendations[]}], staffing_model.',
+  watersolve: 'salutation, opening, executive_summary, bid_items[], includes_products[], includes_equipment[], includes_labor[], schedule_summary, exclusions[], quote_assumptions[], project_description_line, and line_items[{qty, uom, item, description, unitPrice}] (the priced table; amounts are qty x unitPrice and are calculated for you).',
+};
+
+function revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }) {
+  const earlier = (revisionHistory || []).slice(0, -1).filter(Boolean);
+  const form = { ...(formData || {}) };
+  delete form.additionalInstructions; delete form.sectionBuilderState; delete form.wsLineItems;
+  return `You are a senior editor at Solution Group revising a ${docType === 'watersolve' ? 'WaterSolve' : 'Solution Group'} ${docType} document. The document is stored as the JSON config below; your edited JSON is rendered directly into the final Word file.
+
+Today's date is ${todayLong()}.
+
+THE REQUESTED CHANGE (apply it fully; it overrides the original writing rules and any earlier choice):
+${revisionInstructions}
+${earlier.length ? `
+EARLIER CHANGES (already applied; keep them in effect unless the new request reverses them):
+${earlier.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+` : ''}
+CURRENT DOCUMENT CONFIG:
+${JSON.stringify(previousConfig, null, 2)}
+
+CURRENT FORM VALUES (the user may have edited these since the last version; names, contacts, dates and amounts here win over the config):
+${JSON.stringify(form, null, 2)}
+${fileText ? `
+SOURCE FILES (use for facts the change needs):
+${fileText}
+` : ''}
+WHAT YOU CAN CHANGE: ${REVISABLE[docType] || REVISABLE.project}
+
+HOW TO APPLY THE CHANGE:
+- Make the change everywhere it matters, not just the first place. If a price changes, update every dependent total so the numbers add up. If a fact changes, update every sentence that states it.
+- Rewrite, shorten, expand, reorder, or change tone with real editorial judgment. "Shorter" means materially shorter.
+- To add a section: put its content in additional_sections.<snake_case_key> (paragraphs separated by blank lines, or an array of bullets) and set section_order to the complete ordered list of section keys, including the new one. To remove a section, leave its key out of section_order. To rename one, use a new key with the new title.
+- To add or remove a signature block, set include_signature to true or false.
+- Leave everything the request does not touch exactly as it is.
+- Keep every fact appearing once. If the change introduces something already stated elsewhere, remove the older copy.
+- Never use em dashes. Never invent dollar amounts the user or the source files did not give.
+- Tax and proposal-validity statements are added automatically. Only write them in pricing.pricing_notes, and only if the request is about tax or validity wording.
+
+Return ONLY the complete updated config as valid JSON, with the same structure. No markdown, no commentary.`;
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -804,40 +922,23 @@ module.exports = async function (req, res) {
   }
 
   try {
-    const { docType, formData, fileContents, previousConfig, revisionInstructions, optionalSections, sectionOrder } = req.body;
+    const { docType, formData, fileContents, previousConfig, revisionInstructions, revisionHistory, optionalSections, sectionOrder } = req.body;
     // Merge optionalSections into formData so prompts and injection logic can access it
     if (optionalSections?.length && formData) formData.optionalSections = optionalSections;
     // User-defined section order takes priority over everything
     if (sectionOrder?.length && formData) formData.sectionOrder = sectionOrder;
+    if (formData) formData.docType = docType;
     const fileText = (fileContents || []).join('\n\n---\n\n');
 
     let cfg;
 
-    if (previousConfig && revisionInstructions) {
-      // ── REVISION MODE: edit the previous config surgically ──
-      const revisionPrompt = `You are a senior proposal writer and editor at Solution Group. You are making specific revisions to an existing proposal config JSON.
-
-Today's date is: ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}
-
-CURRENT CONFIG:
-${JSON.stringify(previousConfig, null, 2)}
-
-REVISION INSTRUCTIONS:
-${revisionInstructions}
-
-Apply these instructions with full reasoning ability:
-- If asked to convert currency, use your knowledge of current exchange rates, do the actual math on every monetary value, and add a pricing_note showing the rate used
-- If asked to change tone or rewrite sections, use genuine editorial judgment
-- If asked to add a timeline, generate a realistic one based on the project scope
-- If asked to update a date, use today's date unless a specific date is given
-- Make ONLY the changes requested — copy all other fields verbatim
-- If asked to add a signature block, set "include_signature": true
-- If asked to remove a signature block, set "include_signature": false
-- Never use em dashes
-- REDUNDANCY RULE: Every fact, dollar amount, or commitment must appear exactly once in the most relevant section. If a change introduces a fact already stated elsewhere, remove the duplicate rather than keeping both.
-- Return ONLY valid JSON, no markdown, no preamble`;
-
-      const raw = await callClaude([{ role: 'user', content: revisionPrompt }], 4096);
+    const isRevision = !!(previousConfig && revisionInstructions);
+    if (isRevision) {
+      // ── REVISION MODE: edit the current document as the user asked ──
+      if (docType === 'watersolve' && !Array.isArray(previousConfig.line_items)) {
+        previousConfig.line_items = parseLineItems(formData?.wsLineItems);
+      }
+      const raw = await callClaude([{ role: 'user', content: revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }) }]);
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('Revision did not return valid JSON.');
       cfg = JSON.parse(jsonMatch[0]);
@@ -892,8 +993,7 @@ Return ONLY the document content — no preamble, no explanation.`
         });
 
         const customBuffer = await Packer.toBuffer(customDoc);
-        const now = new Date();
-        const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
+        const dateShort = todayShort();
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         res.setHeader('Content-Disposition', `attachment; filename="SG Custom Document - ${dateShort}.docx"`);
         res.status(200).send(customBuffer);
@@ -901,7 +1001,7 @@ Return ONLY the document content — no preamble, no explanation.`
       }
       else throw new Error(`Unknown docType: ${docType}`);
 
-      const raw = await callClaude([{ role: 'user', content: prompt }], 4096);
+      const raw = await callClaude([{ role: 'user', content: prompt }]);
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('Claude did not return valid JSON config.');
       cfg = JSON.parse(jsonMatch[0]);
@@ -909,7 +1009,7 @@ Return ONLY the document content — no preamble, no explanation.`
 
     // On first generation: use formData for include_signature (form dropdown is authoritative)
     // On revision: trust Claude's output (user may have asked to add/remove signature via revision)
-    if (!previousConfig) {
+    if (!isRevision) {
       cfg.include_signature = formData.includeSignature === 'yes';
     }
 
@@ -937,47 +1037,13 @@ Return ONLY the document content — no preamble, no explanation.`
       if (!hasRealTimeframes) cfg.timeline = [];
     }
 
-    // Inject optional sections selected by the user
-    const selectedSections = formData?.optionalSections || [];
-    const clientNameForSections = cfg.client?.short_name || cfg.client?.name || 'the client';
-
-    // ALWAYS wipe Claude-generated additional_sections
-    cfg.additional_sections = {};
-
-    // Inject optional section content
-    if (selectedSections.length > 0) {
-      selectedSections.forEach(key => {
-        const sectionDef = OPTIONAL_SECTION_CONTENT[key];
-        if (!sectionDef) return;
-        const sectionContent = sectionDef.content.replace(/CLIENT_NAME/g, clientNameForSections);
-        cfg.additional_sections[key] = sectionContent;
-      });
+    if (docType === 'watersolve') {
+      cfg.line_items = parseLineItems(isRevision && Array.isArray(cfg.line_items) ? cfg.line_items : formData?.wsLineItems);
+    } else if (!isRevision) {
+      applySectionChoices(cfg, formData);
     }
-
-    // ALWAYS apply user-defined section order if provided — regardless of optional sections
-    // This is the source of truth from the section builder page
-    if (formData?.sectionOrder?.length) {
-      cfg.section_order = formData.sectionOrder;
-    } else if (selectedSections.length > 0) {
-      // No explicit order but has optional sections — insert at logical positions
-      const defaultOrder = ['introduction','project_confirmation','engineering_scope','commercial_summary','timeline','assumptions','next_steps'];
-      const optionalOrder = {
-        opticlear:    'commercial_summary',
-        sg_academy:   'assumptions',
-        safety:       'assumptions',
-        kpi_reporting:'assumptions',
-      };
-      selectedSections.forEach(key => {
-        if (cfg.additional_sections[key] && !defaultOrder.includes(key)) {
-          const insertAfter = optionalOrder[key] || 'commercial_summary';
-          const idx = defaultOrder.indexOf(insertAfter);
-          idx !== -1 ? defaultOrder.splice(idx + 1, 0, key) : defaultOrder.push(key);
-        }
-      });
-      cfg.section_order = defaultOrder;
-    } else {
-      // No optional sections, no user order — wipe any Claude-generated order
-      delete cfg.section_order;
+    if (docType !== 'assessment' && docType !== 'watersolve') {
+      enforceCommercialRules(cfg, isRevision && /\btax|\bvalid/i.test(revisionInstructions));
     }
 
     // 3. Build the docx
@@ -989,8 +1055,7 @@ Return ONLY the document content — no preamble, no explanation.`
 
     const buffer = await Packer.toBuffer(doc);
 
-    const now = new Date();
-    const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
+    const dateShort = todayShort();
     const clientName = (cfg.client?.short_name || cfg.client?.name || formData?.clientShortName || formData?.clientLegalName || 'Client').trim();
     const projectDesc = (cfg.proposal_title || formData?.projectTitle || '')
       .replace(/[-\u2013\u2014]/g, ' ')
@@ -998,11 +1063,9 @@ Return ONLY the document content — no preamble, no explanation.`
       .split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
     const filename = `${clientName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}.docx`;
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('X-Document-Config', Buffer.from(JSON.stringify(cfg)).toString('base64'));
-    res.setHeader('Access-Control-Expose-Headers', 'X-Document-Config');
-    res.status(200).send(buffer);
+    // JSON, not a binary download: the client needs the config to make later revisions,
+    // and a large config does not fit in a response header.
+    res.status(200).json({ filename, docBase64: buffer.toString('base64'), config: cfg });
 
   } catch (err) {
     res.status(500).json({ error: err.message });

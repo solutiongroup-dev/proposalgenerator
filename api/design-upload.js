@@ -11,9 +11,9 @@
 
 const { handleUploadPresigned } = require('@vercel/blob/client');
 const { issueSignedToken } = require('@vercel/blob');
+const { blobCredentials, REQUEST_PATH_RE } = require('./_blob');
 
 const MAX_BYTES = 500 * 1024 * 1024;
-const PATH_RE   = /^design-requests\/DR-\d{6}-[A-Z0-9]{4}\/[\w.\- ]{1,140}$/;
 const TYPES = [
   'image/*', 'application/pdf', 'text/*', 'application/zip', 'application/octet-stream',
   'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint',
@@ -23,16 +23,9 @@ const TYPES = [
   'application/postscript', 'application/illustrator', 'video/*',
 ];
 
-function credentials(req) {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return { token: process.env.BLOB_READ_WRITE_TOKEN };
-  if (!process.env.BLOB_STORE_ID) return null;
-  const oidcToken = req.headers['x-vercel-oidc-token'] || process.env.VERCEL_OIDC_TOKEN;
-  return { storeId: process.env.BLOB_STORE_ID, ...(oidcToken ? { oidcToken } : {}) };
-}
-
 module.exports = async function (req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'POST only' }); return; }
-  const creds = credentials(req);
+  const creds = blobCredentials(req);
   if (!creds) {
     res.status(500).json({ error: 'File storage not set up (no Blob store connected).' });
     return;
@@ -42,7 +35,7 @@ module.exports = async function (req, res) {
       body: req.body,
       request: req,
       getSignedToken: async (pathname) => {
-        if (!PATH_RE.test(pathname)) throw new Error('Invalid upload path');
+        if (!REQUEST_PATH_RE.test(pathname)) throw new Error('Invalid upload path');
         const token = await issueSignedToken({
           ...creds,
           pathname,

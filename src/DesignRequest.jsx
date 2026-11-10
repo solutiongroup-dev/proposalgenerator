@@ -19,6 +19,8 @@ const FILE_ROLES = ["Photo to use in the document", "Source content (pull text/d
 const MAX_FILE_MB = 500;
 
 const sanitize = name => name.replace(/[^\w.\- ]+/g, "").replace(/\s+/g, "_").slice(-120) || "file";
+// The store is private: links go through /api/design-file, which signs a fresh URL per click
+const fileLink = pathname => `${window.location.origin}/api/design-file?p=${encodeURIComponent(pathname)}`;
 const mb = bytes => (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + " MB";
 
 function newRequestId() {
@@ -119,14 +121,15 @@ export default function DesignRequest({ onBack, defaultName, email }) {
         const x = files[i];
         setStatus(`Uploading ${i + 1} of ${files.length}: ${x.file.name}`);
         const blob = await upload(`design-requests/${id}/${sanitize(x.file.name)}`, x.file, {
-          access: "public",
+          access: "private",
           handleUploadUrl: "/api/design-upload",
           multipart: x.file.size > 20 * 1048576,
           contentType: x.file.type || "application/octet-stream",
           onUploadProgress: ({ percentage }) => setFile(i, { progress: Math.round(percentage) }),
         });
-        setFile(i, { progress: 100, url: blob.url });
-        uploaded.push({ name: x.file.name, size: x.file.size, role: x.role, note: x.note, url: blob.url });
+        const url = fileLink(blob.pathname);
+        setFile(i, { progress: 100, url });
+        uploaded.push({ name: x.file.name, size: x.file.size, role: x.role, note: x.note, url });
       }
 
       // 2. The brief itself, saved next to the files
@@ -134,8 +137,9 @@ export default function DesignRequest({ onBack, defaultName, email }) {
       let brief = buildBrief(id, f, uploaded);
       const briefFile = new File([brief], `${id}-brief.md`, { type: "text/markdown" });
       const briefBlob = await upload(`design-requests/${id}/${id}-brief.md`, briefFile, {
-        access: "public", handleUploadUrl: "/api/design-upload", contentType: "text/markdown",
+        access: "private", handleUploadUrl: "/api/design-upload", contentType: "text/markdown",
       });
+      const briefUrl = fileLink(briefBlob.pathname);
 
       // 3. Email Chase
       setStatus("Sending to Chase");
@@ -152,12 +156,12 @@ export default function DesignRequest({ onBack, defaultName, email }) {
         priority: f.priority,
         file_count: String(uploaded.length),
         file_list: uploaded.length ? uploaded.map(u => `${u.name} (${mb(u.size)}): ${u.url}`).join("\n") : "None",
-        brief_url: briefBlob.url,
-        brief: brief.length > MAX ? brief.slice(0, MAX) + `\n\n[Brief continues: open the full brief at ${briefBlob.url}]` : brief,
+        brief_url: briefUrl,
+        brief: brief.length > MAX ? brief.slice(0, MAX) + `\n\n[Brief continues: open the full brief at ${briefUrl}]` : brief,
       });
 
       try { localStorage.setItem("sg_generated_by", f.requesterName); } catch (e) {}
-      setDone({ id, brief, briefUrl: briefBlob.url });
+      setDone({ id, brief, briefUrl });
     } catch (e) {
       const msg = e?.text || e?.message || String(e);
       setErr(/BLOB_READ_WRITE_TOKEN|storage not set up/i.test(msg)

@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import { prepareBinaryFiles } from "./fileprep.js";
+import DesignRequest from "./DesignRequest.jsx";
 import WaterSolveForm, { WS_FIELDS, WS_PARSE_KEYS, WS_DEFAULTS, WS_PARSE_GUIDE, parseWsItems, wsItemsTotal, wsProposalNumber } from "./WaterSolveForm.jsx";
 
 const SG_BLUE = "#2B579A";
@@ -438,11 +439,13 @@ const DOC_TYPES = [
   { id:"project",    icon:"🏗️", title:"Project Proposal",   desc:"Full capital project proposal: scope, architecture, schedule, itemized pricing, and signature block.", badge:"CapEx Project", badgeClass:"badge-proj" },
   { id:"watersolve", icon:"💧", title:"WaterSolve Proposal", desc:"WaterSolve dredging, dewatering and geotextile tube proposal or sales quote, in WaterSolve format.", badge:"WaterSolve", badgeClass:"badge-proj" },
   { id:"custom",     icon:"✏️", title:"Custom Document",    desc:"Freeform — describe exactly what you need. No predefined structure or required fields.", badge:"Freeform", badgeClass:"badge-o" },
+  { id:"design",     icon:"🎨", title:"Design Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to Chase.", badge:"To Chase", badgeClass:"badge-o" },
 ];
 
 const EMAILJS_SERVICE  = 'service_71nz8kc';
 const EMAILJS_TEMPLATE = 'template_ex35j5g';
 const EMAILJS_KEY      = 'uITaQIb_MQzLk8dQ7';
+const EMAILJS_DESIGN_TEMPLATE = ''; // EmailJS template that emails design requests to Chase
 const EMAIL_DELAY_MS   = 0; // Send immediately after generation
 const PARSE_STEPS = ["Reading uploaded files","Extracting data with Claude","Populating form fields"];
 const GEN_STEPS   = ["Extracting file content","Sending to server","Building branded document","Preparing download"];
@@ -836,6 +839,7 @@ export default function App() {
       setPage("custom");
       return;
     }
+    if (type === 'design') { setPage("design"); return; }
     setDocType(null); setFormData({}); setErrors({});
     setPastedText(""); setFiles([]); setAiKeys(new Set());
     setParsed(false); setParseErr(""); setGenErr("");
@@ -1593,6 +1597,15 @@ ${WS_PARSE_GUIDE}`;
         );
       })()}
 
+      {/* ── DESIGN REQUEST ── */}
+      {page==="design" && (
+        <DesignRequest
+          onBack={()=>setPage("home")}
+          defaultName={formData.generatedBy || (()=>{ try { return localStorage.getItem("sg_generated_by") || ""; } catch(e) { return ""; } })()}
+          email={{ service: EMAILJS_SERVICE, template: EMAILJS_DESIGN_TEMPLATE, load: loadEmailJS }}
+        />
+      )}
+
       {/* ── CUSTOM ── */}
       {page==="custom" && (
         <div className="custom-page">
@@ -1690,7 +1703,7 @@ ${WS_PARSE_GUIDE}`;
             <div className="section" style={{padding:"16px 28px"}}>
               <div className="section-title" style={{marginBottom:12}}>Document Type</div>
               <div style={{display:"flex",gap:10}}>
-                {DOC_TYPES.map(dt=>(
+                {DOC_TYPES.filter(dt=>dt.id!=="design").map(dt=>(
                   <button key={dt.id} onClick={()=>selectDoc(dt.id)} style={{
                     flex:1, padding:"10px 8px", border:`2px solid ${docType===dt.id ? SG_BLUE : SG_BORDER_GRAY}`,
                     borderRadius:6, background: docType===dt.id ? SG_BLUE : "white",

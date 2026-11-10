@@ -11,14 +11,24 @@ const { handleUpload } = require('@vercel/blob/client');
 const MAX_BYTES = 500 * 1024 * 1024;
 const PATH_RE   = /^design-requests\/DR-\d{6}-[A-Z0-9]{4}\/[\w.\- ]{1,140}$/;
 
+// Vercel names the variable BLOB_READ_WRITE_TOKEN by default, or <PREFIX>_READ_WRITE_TOKEN
+// when the store was connected with a custom prefix. Accept either.
+function blobToken() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
+  const key = Object.keys(process.env).find(k => k.endsWith('_READ_WRITE_TOKEN') && String(process.env[k]).startsWith('vercel_blob_rw_'));
+  return key ? process.env[key] : null;
+}
+
 module.exports = async function (req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'POST only' }); return; }
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  const token = blobToken();
+  if (!token) {
     res.status(500).json({ error: 'File storage not set up (BLOB_READ_WRITE_TOKEN missing).' });
     return;
   }
   try {
     const result = await handleUpload({
+      token,
       body: req.body,
       request: req,
       onBeforeGenerateToken: async (pathname) => {

@@ -20,11 +20,11 @@ const {
 } = require('docx');
 const TERMS = require('./watersolve-terms');
 
-const img = f => fs.readFileSync(path.join(__dirname, f));
-const LOGO_COVER  = img('ws_logo_cover.jpg');   // 1173x262
-const LOGO_HEADER = img('ws_logo_header.jpg');  // 1200x268
-const LOGO_SGCO   = img('ws_logo_sgco.png');    // 343x86 ("A Solution Group Company")
-const ISN_BADGE   = img('ws_isn_badge.png');    // 150x150
+// Literal paths so Vercel's file tracing bundles the images with the function
+const LOGO_COVER  = fs.readFileSync(path.join(__dirname, 'ws_logo_cover.jpg'));   // 1173x262
+const LOGO_HEADER = fs.readFileSync(path.join(__dirname, 'ws_logo_header.jpg'));  // 1200x268
+const LOGO_SGCO   = fs.readFileSync(path.join(__dirname, 'ws_logo_sgco.png'));    // 343x86 ("A Solution Group Company")
+const ISN_BADGE   = fs.readFileSync(path.join(__dirname, 'ws_isn_badge.png'));    // 150x150
 
 const TNR   = 'Times New Roman';
 const ARIAL = 'Arial';

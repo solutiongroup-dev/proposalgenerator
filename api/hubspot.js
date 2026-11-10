@@ -13,18 +13,16 @@ const PIPELINES = {
   Recurring: { pipelineId: '2276783856', stageId: '3669908170' },
 };
 
-// WaterSolve deals go to the HubSpot pipeline whose name contains "WaterSolve",
-// in its first stage. Looked up by name so no IDs need to be copied in.
+// WaterSolve deals go to the WaterSolve pipeline, in its first stage
+const WATERSOLVE_PIPELINE_ID = '2504421073';
 let waterSolvePipelineCache = null;
 async function waterSolvePipeline() {
   if (waterSolvePipelineCache) return waterSolvePipelineCache;
-  const { results = [] } = await hubspotRequest('GET', '/crm/v3/pipelines/deals');
-  const p = results.find(r => /water\s*solve/i.test(r.label || ''));
-  if (!p) throw new Error(`No HubSpot deal pipeline named "WaterSolve" (found: ${results.map(r => r.label).join(', ')})`);
+  const p = await hubspotRequest('GET', `/crm/v3/pipelines/deals/${WATERSOLVE_PIPELINE_ID}`);
   const stage = [...(p.stages || [])].filter(st => !st.archived).sort((a, b) => a.displayOrder - b.displayOrder)[0];
-  if (!stage) throw new Error(`The "${p.label}" pipeline has no stages`);
-  waterSolvePipelineCache = { pipelineId: p.id, stageId: stage.id, label: p.label, stageLabel: stage.label };
-  console.log(`WaterSolve pipeline: ${p.label} (${p.id}), stage ${stage.label} (${stage.id})`);
+  if (!stage) throw new Error(`The WaterSolve pipeline (${WATERSOLVE_PIPELINE_ID}) has no stages`);
+  waterSolvePipelineCache = { pipelineId: WATERSOLVE_PIPELINE_ID, stageId: stage.id, label: p.label || 'WaterSolve', stageLabel: stage.label };
+  console.log(`WaterSolve pipeline: ${waterSolvePipelineCache.label}, stage ${stage.label} (${stage.id})`);
   return waterSolvePipelineCache;
 }
 

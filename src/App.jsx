@@ -823,7 +823,7 @@ export default function App() {
     setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
-      const defaultPipeline = type === "project" || type === "watersolve" ? "Project" : type === "proposal" ? "Recurring" : "";
+      const defaultPipeline = type === "watersolve" ? "WaterSolve" : type === "project" ? "Project" : type === "proposal" ? "Recurring" : "";
       return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [], sectionOrder: null, pipeline: defaultPipeline,
         ...(type === "watersolve" ? WS_DEFAULTS : {}) };
     });
@@ -991,7 +991,7 @@ ${WS_PARSE_GUIDE}`;
       });
 
       const suggested = extracted.suggestedDocType || "project";
-      const defaultPipeline = suggested === "project" || suggested === "watersolve" ? "Project" : suggested === "proposal" ? "Recurring" : "";
+      const defaultPipeline = suggested === "watersolve" ? "WaterSolve" : suggested === "project" ? "Project" : suggested === "proposal" ? "Recurring" : "";
       merged.pipeline = merged.pipeline || defaultPipeline;
       if (suggested === "watersolve") {
         Object.entries(WS_DEFAULTS).forEach(([k, v]) => { if (!merged[k]) merged[k] = v; });
@@ -1263,7 +1263,7 @@ ${WS_PARSE_GUIDE}`;
               .then(({ ok, j }) => {
                 if (!ok) throw new Error(j?.error || "Attachment failed");
                 console.log(`✓ Document attached to deal ${data.dealId} (file ${j.fileId})`);
-                setHubspotStatus({ state:"done", text:`Document attached to HubSpot deal "${data.dealName}"` });
+                setHubspotStatus({ state:"done", text:`Document attached to HubSpot deal "${data.dealName}"${data.pipeline ? ` in the ${data.pipeline} pipeline` : ""}` });
               })
               .catch(e => {
                 console.warn('HubSpot attach failed:', e.message);
@@ -1716,7 +1716,7 @@ ${WS_PARSE_GUIDE}`;
 
               {/* Calculated end date — shown based on pipeline type */}
               {(() => {
-                const isProject  = formData.pipeline === "Project";
+                const isProject  = formData.pipeline === "Project" || formData.pipeline === "WaterSolve";
                 const isRecurring = formData.pipeline === "Recurring";
                 const lengthDays = isProject ? formData.projectLengthDays : isRecurring ? formData.contractLengthDays : null;
                 const endDate    = calculateEndDate(formData.closeDate, lengthDays);

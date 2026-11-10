@@ -13,6 +13,27 @@ const PIPELINES = {
   Recurring: { pipelineId: '2276783856', stageId: '3669908170' },
 };
 
+// WaterSolve deals go to the HubSpot pipeline whose name contains "WaterSolve",
+// in its first stage. Looked up by name so no IDs need to be copied in.
+let waterSolvePipelineCache = null;
+async function waterSolvePipeline() {
+  if (waterSolvePipelineCache) return waterSolvePipelineCache;
+  const { results = [] } = await hubspotRequest('GET', '/crm/v3/pipelines/deals');
+  const p = results.find(r => /water\s*solve/i.test(r.label || ''));
+  if (!p) throw new Error(`No HubSpot deal pipeline named "WaterSolve" (found: ${results.map(r => r.label).join(', ')})`);
+  const stage = [...(p.stages || [])].filter(st => !st.archived).sort((a, b) => a.displayOrder - b.displayOrder)[0];
+  if (!stage) throw new Error(`The "${p.label}" pipeline has no stages`);
+  waterSolvePipelineCache = { pipelineId: p.id, stageId: stage.id, label: p.label, stageLabel: stage.label };
+  console.log(`WaterSolve pipeline: ${p.label} (${p.id}), stage ${stage.label} (${stage.id})`);
+  return waterSolvePipelineCache;
+}
+
+// Pipeline for a deal: WaterSolve documents always go to the WaterSolve pipeline
+async function resolvePipeline(pipeline, docType) {
+  if (docType === 'watersolve' || pipeline === 'WaterSolve') return { key: 'WaterSolve', ...(await waterSolvePipeline()) };
+  return pipeline === 'Project' ? { key: 'Project', ...PIPELINES.Project } : { key: 'Recurring', ...PIPELINES.Recurring };
+}
+
 module.exports.config = {
   api: { bodyParser: { sizeLimit: '2mb' } }
 };
@@ -91,12 +112,11 @@ async function findDealById(dealId) {
 }
 
 // ── Find existing deal by client name (fuzzy) ─────────────────────────────────
-async function findExistingDealByClient(clientName, pipeline) {
+async function findExistingDealByClient(clientName, pipelineId) {
   if (!clientName) return null;
   try {
     // Search deals by dealname containing the client name
     const cleanName = clientName.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
-    const pipelineId = pipeline === 'Project' ? PIPELINES['Project'].pipelineId : PIPELINES['Recurring'].pipelineId;
     const result = await hubspotRequest('POST', '/crm/v3/objects/deals/search', {
       filterGroups: [{
         filters: [
@@ -161,7 +181,8 @@ module.exports = async function (req, res) {
       projectLengthDays, contractLengthDays,
     } = body;
 
-    const pipelineConfig = pipeline === 'Project' ? PIPELINES['Project'] : PIPELINES['Recurring'];
+    const pipelineConfig = await resolvePipeline(pipeline, docType);
+    const isProjectLike = pipelineConfig.key !== 'Recurring';
     const effectiveClientName = clientName || clientShortName || 'Unknown Client';
     const dealName = buildDealName(effectiveClientName, docType, projectTitle);
 
@@ -195,9 +216,9 @@ module.exports = async function (req, res) {
       ...(parseCost(laborCost)      ? { labor_cost:      String(parseCost(laborCost))      } : {}),
       ...(parseCost(technologyCost) ? { technology_cost: String(parseCost(technologyCost)) } : {}),
       ...(dealSource ? { deal_source: dealSource } : {}),
-      ...(pipeline === 'Project' && projectLengthDays && effectiveCloseDate
+      ...(isProjectLike && projectLengthDays && effectiveCloseDate
         ? { estimated_project_end_date: addDays(effectiveCloseDate, projectLengthDays) } : {}),
-      ...(pipeline === 'Recurring' && contractLengthDays && effectiveCloseDate
+      ...(!isProjectLike && contractLengthDays && effectiveCloseDate
         ? { estimated_contract_end_date: addDays(effectiveCloseDate, contractLengthDays) } : {}),
     };
 
@@ -209,7 +230,7 @@ module.exports = async function (req, res) {
 
     // Check 2: fuzzy match by client name across all deals (cross-session duplicate prevention)
     if (!existingDeal) {
-      const fuzzyId = await findExistingDealByClient(effectiveClientName, pipeline);
+      const fuzzyId = await findExistingDealByClient(effectiveClientName, pipelineConfig.pipelineId);
       if (fuzzyId) existingDeal = await findDealById(fuzzyId);
     }
 
@@ -251,7 +272,7 @@ module.exports = async function (req, res) {
       }
     }
 
-    res.status(200).json({ success: true, dealId, dealName, isNew });
+    res.status(200).json({ success: true, dealId, dealName, isNew, pipeline: pipelineConfig.label || pipelineConfig.key });
 
   } catch(err) {
     console.error('HubSpot error:', err.message);

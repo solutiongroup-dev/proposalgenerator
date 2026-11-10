@@ -42,7 +42,7 @@ export const WS_PARSE_KEYS = [...WS_FIELDS.map(f => f.key), "wsLineItems", "wsEx
 export const WS_DEFAULTS = {
   wsFormat: "letter", wsPreliminary: "", wsPaymentTerms: "Net 30", wsShipVia: "Common Carrier",
   wsFob: "Delivered", wsShipDate: "TBD", wsFreight: "included", wsIncludeStandardTerms: "",
-  wsTreatability: "yes", dealSource: "WaterSolve", pipeline: "Project",
+  wsTreatability: "yes", dealSource: "WaterSolve", pipeline: "WaterSolve",
 };
 
 export const WS_PARSE_GUIDE = `- "wsLineItems": the priced bid items as a JSON-encoded string of an array: [{"qty":number,"uom":"Lump Sum|each|Days|month|s.f.|totes|...","item":"short item name","description":"one line","unitPrice":number}]. Use the source's own line items and prices. Never invent prices.

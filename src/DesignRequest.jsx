@@ -112,7 +112,7 @@ export default function DesignRequest({ onBack, defaultName, email }) {
     setBusy(true); setErr("");
     const id = newRequestId();
     try {
-      const { upload } = await import("@vercel/blob/client");  // loaded only when a request is sent
+      const { uploadPresigned: upload } = await import("@vercel/blob/client");  // loaded only when a request is sent
       // 1. Files, straight from the browser to Vercel Blob
       const uploaded = [];
       for (let i = 0; i < files.length; i++) {

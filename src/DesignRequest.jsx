@@ -35,7 +35,7 @@ export function buildBrief(id, f, files) {
   const fileList = files.length
     ? files.map((x, i) => `${i + 1}. **${x.name}** (${mb(x.size)}): ${x.role}${x.note ? `. ${x.note}` : ""}\n   ${x.url || "(not uploaded)"}`).join("\n")
     : "No files attached.";
-  return `# Design Request ${id}: ${f.title}
+  return `# Custom Request ${id}: ${f.title}
 
 ## Instructions for Claude
 Produce a finished, ready-to-send ${f.format && !/not sure/i.test(f.format) ? f.format : "document (choose the best format for the purpose and say why)"} from this brief.
@@ -107,7 +107,7 @@ export default function DesignRequest({ onBack, defaultName, email }) {
     setErrors(errs);
     if (Object.keys(errs).length) { setErr("Fill in the highlighted fields. Give at least an outline or the content to include."); return; }
     if (files.some(x => x.tooBig)) { setErr(`Remove files over ${MAX_FILE_MB} MB.`); return; }
-    if (!email.template) { setErr("Design requests aren't switched on yet: the email template ID is missing. Tell Chase."); return; }
+    if (!email.template) { setErr("Custom requests aren't switched on yet: the email template ID is missing. Tell Chase."); return; }
 
     setBusy(true); setErr("");
     const id = newRequestId();
@@ -173,7 +173,7 @@ export default function DesignRequest({ onBack, defaultName, email }) {
       <div className="custom-page">
         <div className="custom-title">Request sent</div>
         <div className="custom-sub">
-          Design request <strong>{done.id}</strong> went to Chase with your files. The finished document will be
+          Custom request <strong>{done.id}</strong> went to Chase with your files. The finished document will be
           emailed to {f.deliverTo || f.requesterEmail}.
         </div>
         <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -189,7 +189,7 @@ export default function DesignRequest({ onBack, defaultName, email }) {
   return (
     <div className="custom-page">
       <button className="form-back" onClick={onBack}>← Back</button>
-      <div className="custom-title">Design Request</div>
+      <div className="custom-title">Custom Request</div>
       <div className="custom-sub">
         For documents that need photos, custom layout or design work and don't fit the proposal templates.
         This goes straight to Chase. Be specific: the more complete this is, the sooner the finished document comes back,

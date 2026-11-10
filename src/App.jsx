@@ -439,13 +439,13 @@ const DOC_TYPES = [
   { id:"project",    icon:"🏗️", title:"Project Proposal",   desc:"Full capital project proposal: scope, architecture, schedule, itemized pricing, and signature block.", badge:"CapEx Project", badgeClass:"badge-proj" },
   { id:"watersolve", icon:"💧", title:"WaterSolve Proposal", desc:"WaterSolve dredging, dewatering and geotextile tube proposal or sales quote, in WaterSolve format.", badge:"WaterSolve", badgeClass:"badge-proj" },
   { id:"custom",     icon:"✏️", title:"Custom Document",    desc:"Freeform — describe exactly what you need. No predefined structure or required fields.", badge:"Freeform", badgeClass:"badge-o" },
-  { id:"design",     icon:"🎨", title:"Design Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to Chase.", badge:"To Chase", badgeClass:"badge-o" },
+  { id:"design",     icon:"🎨", title:"Custom Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to Chase.", badge:"To Chase", badgeClass:"badge-o" },
 ];
 
 const EMAILJS_SERVICE  = 'service_71nz8kc';
 const EMAILJS_TEMPLATE = 'template_ex35j5g';
 const EMAILJS_KEY      = 'uITaQIb_MQzLk8dQ7';
-const EMAILJS_DESIGN_TEMPLATE = ''; // EmailJS template that emails design requests to Chase
+const EMAILJS_DESIGN_TEMPLATE = 'template_22103rc'; // EmailJS template that emails design requests to Chase
 const EMAIL_DELAY_MS   = 0; // Send immediately after generation
 const PARSE_STEPS = ["Reading uploaded files","Extracting data with Claude","Populating form fields"];
 const GEN_STEPS   = ["Extracting file content","Sending to server","Building branded document","Preparing download"];
@@ -1597,7 +1597,7 @@ ${WS_PARSE_GUIDE}`;
         );
       })()}
 
-      {/* ── DESIGN REQUEST ── */}
+      {/* ── CUSTOM REQUEST (sent to Chase) ── */}
       {page==="design" && (
         <DesignRequest
           onBack={()=>setPage("home")}

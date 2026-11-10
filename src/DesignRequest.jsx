@@ -21,7 +21,7 @@ const MAX_FILE_MB = 500;
 const sanitize = name => name.replace(/[^\w.\- ]+/g, "").replace(/\s+/g, "_").slice(-120) || "file";
 // The store is private: links go through /api/design-file, which signs a fresh URL per click
 const fileLink = pathname => `${window.location.origin}/api/design-file?p=${encodeURIComponent(pathname)}`;
-const mb = bytes => (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + " MB";
+const mb = bytes => bytes < 1048576 ? Math.max(1, Math.round(bytes / 1024)) + " KB" : (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + " MB";
 
 function newRequestId() {
   const d = new Date();

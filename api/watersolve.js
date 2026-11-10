@@ -380,7 +380,7 @@ function waterSolveConfigPrompt(formData, fileText) {
     project: f.projectTitle, proposalTitle: f.wsProposalTitle, preliminary: f.wsPreliminary === 'yes',
     site: f.wsSiteLocation, material: f.wsMaterialType, volume: f.wsMaterialVolume, percentSolids: f.wsPercentSolids,
     dredgeDays: f.wsDredgeDays, setupDays: f.wsSetupDays, demobDays: f.wsDemobDays, schedule: f.wsWorkSchedule,
-    treatabilityRecommended: f.wsTreatability === 'yes', scopeNotes: f.wsScopeNotes,
+    treatabilityRecommended: f.wsTreatability === 'yes', scopeNotes: f.wsScopeNotes, sourceFacts: f.sourceSummary,
     userAssumptions: lines(f.wsAssumptions), userExclusions: lines(f.wsExclusions),
   };
 

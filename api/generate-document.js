@@ -143,7 +143,7 @@ const fmt = (n, cfg) => {
   if (n == null || n === '') return '';
   if (Number(n) === 0) return 'Included';
   const sym = cfg?.currency_symbol || '$';
-  return sym + Number(n).toLocaleString('en-US');
+  return sym + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 };
 const annual = n => n != null ? n * 12 : null;
 
@@ -230,6 +230,33 @@ function coverPage(cfg) {
   ];
 }
 
+// ── Table sections (e.g. a chemistry program priced per product) ─────────────
+function tableSection(num, t) {
+  const cols = t.columns || [];
+  const total = 9360;
+  const first = Math.round(total * (cols.length > 4 ? 0.32 : 0.4));
+  const rest = cols.length > 1 ? Math.floor((total - first) / (cols.length - 1)) : total;
+  const widths = cols.map((_, i) => i === 0 ? first : rest);
+  const right = i => (t.align || [])[i] === 'right';
+  const row = (vals, o = {}) => new TableRow({ tableHeader: o.header, children: vals.map((v, i) => new TableCell({
+    borders: brd, width: { size: widths[i], type: WidthType.DXA }, margins: mg,
+    shading: { fill: o.header ? BLUE : o.total ? LBLUE : (o.idx % 2 ? LGRAY : WHITE), type: ShadingType.CLEAR },
+    children: [new Paragraph({ alignment: right(i) && !o.header ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      children: [new TextRun({ text: String(v ?? ''), bold: o.header || o.total, size: 20, color: o.header ? WHITE : o.total ? BLUE : GRAY, font: 'Calibri' })] })],
+  })) });
+  return [
+    blueBar(`${num}. ${t.title}`), ...spacer(1),
+    ...(t.intro ? [body(t.intro)] : []),
+    new Table({ width: { size: total, type: WidthType.DXA }, columnWidths: widths, rows: [
+      row(cols, { header: true }),
+      ...(t.rows || []).map((r, idx) => row(r, { idx })),
+      ...(t.total_row ? [row(t.total_row, { total: true })] : []),
+    ] }),
+    ...(t.notes || []).map(n => body(n, { italic: true })),
+    ...spacer(2),
+  ];
+}
+
 // ── PROPOSAL BUILDER ──────────────────────────────────────────────────────────
 function buildProposal(cfg) {
   const pricing = cfg.pricing || {};
@@ -309,6 +336,7 @@ function buildProposal(cfg) {
 
   const sectionContent = proposalSectionOrder.flatMap(key => {
     if (PROPOSAL_SECTION_RENDERERS[key]) return PROPOSAL_SECTION_RENDERERS[key]();
+    if (cfg.table_sections?.[key]) return tableSection(sn(), cfg.table_sections[key]);
     // Custom / optional section
     const customContent = (cfg.additional_sections || {})[key];
     if (customContent) {
@@ -583,6 +611,7 @@ function buildProject(cfg) {
     if (SECTION_RENDERERS[key]) {
       return SECTION_RENDERERS[key]();
     }
+    if (cfg.table_sections?.[key]) return tableSection(sn(), cfg.table_sections[key]);
     // Custom section — look up in additional_sections or sections object
     const customContent = (cfg.additional_sections || {})[key] || (cfg.sections || {})[key];
     if (customContent) {

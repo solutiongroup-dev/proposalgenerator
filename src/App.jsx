@@ -1,4 +1,5 @@
 import React, { useState, useRef } from "react";
+import { prepareBinaryFiles } from "./fileprep.js";
 import WaterSolveForm, { WS_FIELDS, WS_PARSE_KEYS, WS_DEFAULTS, WS_PARSE_GUIDE, parseWsItems, wsItemsTotal, wsProposalNumber } from "./WaterSolveForm.jsx";
 
 const SG_BLUE = "#2B579A";
@@ -523,7 +524,7 @@ ${fileNames.length ? `Files provided: ${fileNames.join(", ")}` : ""}
 CRITICAL: Return ONLY a flat JSON object — every value must be a plain string or number. No nested objects, no arrays, no null. Use empty string "" for anything not found. Do not include markdown fences or any text outside the JSON.
 
 Extract values for these keys:
-${JSON.stringify(allKeys)}
+${JSON.stringify([...allKeys, "sourceSummary"])}
 
 FIELD MAPPING GUIDANCE:
 - "sgContactName": look for SG rep or "Prepared By". Default to "Ted Winkelman" if not found.
@@ -541,6 +542,8 @@ FIELD MAPPING GUIDANCE:
 - "technologyCost": technology, software, OptiClear, or monitoring cost from pricing table. Include $ and commas.
 - "projectLengthDays": estimated project duration — convert to days (1 week = 7 days, 1 month = 30 days).
 - "contractLengthDays": contract duration — convert to days (1 month = 30 days, 1 year = 365 days).
+- "sourceSummary": key facts from the documents the writer will need that fit no other field (permit numbers and limits, flows, current vendor, chemistry products and quantities, staffing, schedules). Plain lines, max 2500 characters. The writer cannot see PDFs or images, so capture what matters from them here.
+${docType === "watersolve" ? WS_PARSE_GUIDE : ""}
 
 Dates → YYYY-MM-DD. closeProbability → number 0-100. All other values → plain strings.`;
 }
@@ -897,14 +900,11 @@ export default function App() {
     if (!files.length && !pastedText.trim()) { setParseErr("Add a file or paste some context first."); return; }
     setParseErr(""); setParsing(true); setParseStep(0);
     try {
-      const msgContent = [];
+      // PDFs and images are compressed or converted to fit Vercel's 4.5 MB request limit
+      const msgContent = [...(await prepareBinaryFiles(files)).blocks];
       for (const f of files) {
-        if (f.type === "application/pdf") {
-          const b64 = await readFileAsBase64(f);
-          msgContent.push({ type:"document", source:{type:"base64",media_type:"application/pdf",data:b64} });
-        } else if (f.type.startsWith("image/")) {
-          const b64 = await readFileAsBase64(f);
-          msgContent.push({ type:"image", source:{type:"base64",media_type:f.type,data:b64} });
+        if (f.type === "application/pdf" || f.type.startsWith("image/")) {
+          continue;
         } else if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
           const text = await readDocxAsText(f);
           msgContent.push({ type:"text", text:"[Document: " + f.name + "]\n" + text });
@@ -959,11 +959,12 @@ FIELD MAPPING:
 - "contractLengthDays": contract duration in days (1 month = 30 days, 1 year = 365 days)
 - "customerContactName": primary customer/client contact person full name
 - "customerContactEmail": primary customer/client contact email address
+- "sourceSummary": key facts from the uploaded documents that the proposal writer will need but that do not fit another field: permit numbers, discharge limits and monitoring requirements, flows, current vendor/program, chemistry products and quantities, staffing, schedules, pricing assumptions. Plain lines, max 2500 characters. PDFs and images are not available to the writer, so capture what matters from them here.
 WATERSOLVE-ONLY FIELDS (fill only when suggestedDocType is "watersolve"; otherwise use empty strings):
 ${WS_PARSE_GUIDE}`;
 
       msgContent.push({ type:"text", text: prompt });
-      const raw = await callClaude(msgContent, 2500);
+      const raw = await callClaude(msgContent, 5000);
 
       let extracted = {};
       try {
@@ -1055,15 +1056,11 @@ ${WS_PARSE_GUIDE}`;
     if (!files.length && !pastedText.trim()) { setParseErr("Add a file or paste text first."); return; }
     setParseErr(""); setParsing(true); setParseStep(0);
     try {
-      const content = [];
       setParseStep(0);
+      const content = [...(await prepareBinaryFiles(files)).blocks];
       for (const f of files) {
-        if (f.type==="application/pdf") {
-          const b64 = await readFileAsBase64(f);
-          content.push({ type:"document", source:{type:"base64",media_type:"application/pdf",data:b64} });
-        } else if (f.type.startsWith("image/")) {
-          const b64 = await readFileAsBase64(f);
-          content.push({ type:"image", source:{type:"base64",media_type:f.type,data:b64} });
+        if (f.type==="application/pdf" || f.type.startsWith("image/")) {
+          continue;
         } else if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
           const text = await readDocxAsText(f);
           content.push({ type:"text", text:`[Document: ${f.name}]\n${text}` });
@@ -1076,7 +1073,7 @@ ${WS_PARSE_GUIDE}`;
         }
       }
       content.push({ type:"text", text:buildParsePrompt(docType, pastedText, files.map(f=>f.name)) });
-      const raw = await callClaude(content, 2500);
+      const raw = await callClaude(content, 5000);
 
       // Robust JSON extraction — handles markdown fences, extra text, and minor formatting issues
       let extracted = {};

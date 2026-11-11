@@ -650,12 +650,20 @@ function blobToBase64(blob) {
   });
 }
 
-function downloadText(content, filename) {
-  const blob = new Blob([content], { type:"text/plain;charset=utf-8" });
+// Save a file in the browser. Safari starts the download after click() returns,
+// so the object URL must stay alive for a while (revoking it at once causes
+// "WebKitBlobResource error 1"), and the link must be in the document.
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href=url; a.download=filename; a.click();
-  URL.revokeObjectURL(url);
+  a.href = url; a.download = filename; a.rel = "noopener"; a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 60000);
+}
+
+function downloadText(content, filename) {
+  saveBlob(new Blob([content], { type:"text/plain;charset=utf-8" }), filename);
 }
 
 async function callClaude(messageContent, maxTokens=8000, attempt=1) {
@@ -885,14 +893,9 @@ export default function App() {
         throw new Error(err?.error || `Server error ${resp.status}`);
       }
       const blob = await resp.blob();
-      const dlUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
       const now = new Date();
       const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
-      a.href = dlUrl;
-      a.download = `SG Custom Document - ${dateShort}.docx`;
-      a.click();
-      URL.revokeObjectURL(dlUrl);
+      saveBlob(blob, `SG Custom Document - ${dateShort}.docx`);
       setCustomGenerating(false);
     } catch(e) {
       setCustomGenerating(false);
@@ -1203,8 +1206,6 @@ ${WS_PARSE_GUIDE}`;
 
       const bytes = Uint8Array.from(atob(result.docBase64), c => c.charCodeAt(0));
       const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-      const dlUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
       // Filename: {Company} {3-word description} - {M.DD}, plus v2, v3... for revisions
       const now = new Date();
       const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
@@ -1218,8 +1219,7 @@ ${WS_PARSE_GUIDE}`;
         .slice(0, 3).join(' ');          // max 3 words
       const filename = `${companyName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}${nextHistory.length ? ` v${nextHistory.length + 1}` : ''}.docx`;
       setGenStep(3);
-      a.href=dlUrl; a.download=filename; a.click();
-      URL.revokeObjectURL(dlUrl);
+      saveBlob(blob, filename);
       setGenerating(false);
       setGenerated(true);
 

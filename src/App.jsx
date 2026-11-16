@@ -1,6 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { prepareBinaryFiles } from "./fileprep.js";
 import DesignRequest from "./DesignRequest.jsx";
+import { loadDraft, saveDraft, clearDraft, savedLabel, store } from "./draft.js";
 import WaterSolveForm, { WS_FIELDS, WS_PARSE_KEYS, WS_DEFAULTS, WS_PARSE_GUIDE, parseWsItems, wsItemsTotal, wsProposalNumber } from "./WaterSolveForm.jsx";
 
 const SG_BLUE = "#2B579A";
@@ -666,9 +667,19 @@ function downloadText(content, filename) {
   saveBlob(new Blob([content], { type:"text/plain;charset=utf-8" }), filename);
 }
 
+// Plain-language message for a failed server call (people saw "Server error 504" before)
+function friendlyError(status, detail) {
+  if (status === 504) return "Claude took too long to finish. Please try again. If it keeps happening, use fewer or smaller files, or shorten the pasted text.";
+  if (status === 413) return "The files are too large to send together. Try fewer files, or split large PDFs.";
+  if (status === 429 || status === 529) return "Claude is busy right now. Wait a minute and try again.";
+  if (detail && !/^(API|Server) error \d+$/.test(detail)) return detail;
+  if (status >= 500) return `The server hit an error (${status}). Please try again. If it happens again, send Chase a screenshot.`;
+  return detail || `Request failed (${status}).`;
+}
+
 async function callClaude(messageContent, maxTokens=8000, attempt=1) {
   const controller = new AbortController();
-  const tid = setTimeout(() => controller.abort(), 120000);
+  const tid = setTimeout(() => controller.abort(), 290000); // server allows 300 s
   try {
     const resp = await fetch("/api/anthropic-proxy", {
       method:"POST",
@@ -679,18 +690,18 @@ async function callClaude(messageContent, maxTokens=8000, attempt=1) {
     clearTimeout(tid);
     if (!resp.ok) {
       const e = await resp.json().catch(()=>({}));
-      const msg = e?.error?.message || `API error ${resp.status}`;
-      if (attempt < 3 && (resp.status === 529 || resp.status >= 500)) {
+      // Retry brief overloads and crashes, but never a timeout: it would just time out again
+      if (attempt < 3 && resp.status !== 504 && (resp.status === 529 || resp.status === 429 || resp.status >= 500)) {
         await new Promise(r => setTimeout(r, 4000 * attempt));
         return callClaude(messageContent, maxTokens, attempt + 1);
       }
-      throw new Error(msg);
+      throw new Error(friendlyError(resp.status, e?.error?.message));
     }
     const data = await resp.json();
     return data.content.map(b=>b.text||"").join("\n");
   } catch(e) {
     clearTimeout(tid);
-    if (e.name === "AbortError") throw new Error("Request timed out — try reducing pasted text or using fewer files.");
+    if (e.name === "AbortError") throw new Error(friendlyError(504));
     if (attempt < 3 && e.message.includes("network")) {
       await new Promise(r => setTimeout(r, 3000));
       return callClaude(messageContent, maxTokens, attempt + 1);
@@ -752,7 +763,7 @@ export default function App() {
   const [page,        setPage]        = useState("home");
   const [docType,     setDocType]     = useState(null);
   const [formData,    setFormData]    = useState(() => {
-    const saved = localStorage.getItem("sg_generated_by");
+    const saved = store.get("sg_generated_by");
     const threeMonths = new Date();
     threeMonths.setMonth(threeMonths.getMonth() + 3);
     const defaultCloseDate = threeMonths.toISOString().split('T')[0];
@@ -788,6 +799,70 @@ export default function App() {
   const [skipHubspot,  setSkipHubspot]  = useState(false);
   const [hubspotStatus, setHubspotStatus] = useState(null); // null | {state:'working'|'done'|'error', text}
   const emailTimerRef = useRef(null);
+
+  // ── Draft autosave: nothing a person enters is lost to a failed parse or
+  // generation, a crash, a reload or a closed tab. Saved in IndexedDB (files too).
+  const [draftReady, setDraftReady] = useState(false);
+  const [restoredAt, setRestoredAt] = useState(null);
+  const hasWork = !!(pastedText.trim() || files.length || customPrompt.trim() || customFiles.length || docType ||
+    Object.keys(formData).some(k => !["closeDate", "generatedBy", "optionalSections", "sectionOrder", "pipeline"].includes(k) && String(formData[k] ?? "").trim()));
+
+  useEffect(() => {
+    let cancelled = false;
+    loadDraft("main").then(d => {
+      if (cancelled) return;
+      const worth = d && (d.pastedText?.trim() || d.files?.length || d.customPrompt?.trim() || d.customFiles?.length || d.docType);
+      if (worth) {
+        setDocType(d.docType || null);
+        setFormData(d.formData || {});
+        setAiKeys(new Set(d.aiKeys || []));
+        setPastedText(d.pastedText || "");
+        setFiles(d.files || []);
+        setParsed(!!d.parsed);
+        setGenerated(!!d.generated);
+        setRevisions(d.revisions || "");
+        setLastConfig(d.lastConfig || null);
+        setLastFileContents(d.lastFileContents || []);
+        setRevisionHistory(d.revisionHistory || []);
+        setLastDealId(d.lastDealId || null);
+        setCustomPrompt(d.customPrompt || "");
+        setCustomFiles(d.customFiles || []);
+        if (d.page && d.page !== "home") setPage(d.page);
+        setRestoredAt(d.savedAt || Date.now());
+      }
+      setDraftReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;   // don't overwrite a saved draft before it has been restored
+    const t = setTimeout(() => {
+      saveDraft("main", {
+        page: page === "design" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
+        revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [draftReady, page, docType, formData, aiKeys, pastedText, files, parsed, generated, revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles]);
+
+  const resetWork = () => {
+    setDocType(null); setErrors({}); setPastedText(""); setFiles([]); setAiKeys(new Set());
+    setParsed(false); setParseErr(""); setGenErr(""); setGenerated(false); setRevisions("");
+    setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
+    setCustomPrompt(""); setCustomFiles([]); setCustomErr(""); setRestoredAt(null);
+    setFormData(prev => {
+      const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
+      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || store.get("sg_generated_by") || "", optionalSections: [] };
+    });
+  };
+  const startOver = () => {
+    if (!window.confirm("Clear everything you've entered and start over?")) return;
+    resetWork(); clearDraft("main"); setPage("home");
+  };
+  const clip = t => { t = String(t || "").trim().replace(/\s+/g, " "); return t.length > 40 ? t.slice(0, 40) + "…" : t; };
+  const workTitle = formData.clientShortName || formData.clientLegalName || formData.clientName ||
+    clip(customPrompt) || clip(pastedText) || files[0]?.name || customFiles[0]?.name || "your document";
 
   const loadEmailJS = () => new Promise((res, rej) => {
     if (window.emailjs) { res(); return; }
@@ -835,27 +910,18 @@ export default function App() {
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
       const defaultPipeline = type === "watersolve" ? "WaterSolve" : type === "project" ? "Project" : type === "proposal" ? "Recurring" : "";
-      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [], sectionOrder: null, pipeline: defaultPipeline,
+      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || store.get("sg_generated_by") || "", optionalSections: [], sectionOrder: null, pipeline: defaultPipeline,
         ...(type === "watersolve" ? WS_DEFAULTS : {}) };
     });
     setPage(type === 'assessment' || type === 'custom' || type === 'watersolve' ? 'form' : 'sections');
   };
 
   const startIntake = (type) => {
-    if (type === 'custom') {
-      setCustomPrompt(""); setCustomFiles([]); setCustomErr("");
-      setPage("custom");
-      return;
-    }
-    if (type === 'design') { setPage("design"); return; }
-    setDocType(null); setFormData({}); setErrors({});
-    setPastedText(""); setFiles([]); setAiKeys(new Set());
-    setParsed(false); setParseErr(""); setGenErr("");
-    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null); setFormData(prev => {
-      const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
-      return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || localStorage.getItem("sg_generated_by") || "", optionalSections: [] };
-    });
-    setPage("intake");
+    if (type === 'design') { setPage("design"); return; }   // has its own saved draft
+    // Starting a new document replaces the saved one, so check first
+    if (hasWork && !window.confirm(`You have work in progress (${workTitle}). Start a new document and clear it?\n\nChoose Cancel, then "Continue", to keep working on it.`)) return;
+    resetWork();
+    setPage(type === 'custom' ? "custom" : "intake");
   };
 
   const handleCustomGenerate = async () => {
@@ -890,7 +956,7 @@ export default function App() {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(()=>({}));
-        throw new Error(err?.error || `Server error ${resp.status}`);
+        throw new Error(friendlyError(resp.status, err?.error));
       }
       const blob = await resp.blob();
       const now = new Date();
@@ -1028,7 +1094,7 @@ ${WS_PARSE_GUIDE}`;
     setFormData(p=>({...p,[key]:val}));
     if (errors[key]) setErrors(p=>({...p,[key]:false}));
     if (key === 'generatedBy' && val.trim()) {
-      localStorage.setItem("sg_generated_by", val.trim());
+      store.set("sg_generated_by", val.trim());
     }
   };
 
@@ -1188,7 +1254,7 @@ ${WS_PARSE_GUIDE}`;
       });
       setGenStep(2);
       const result = await resp.json().catch(() => ({}));
-      if (!resp.ok || !result.docBase64) throw new Error(result?.error || `Server error ${resp.status}`);
+      if (!resp.ok || !result.docBase64) throw new Error(friendlyError(resp.status, result?.error));
       const cfg = result.config || null;
       setLastConfig(cfg);
       setRevisionHistory(nextHistory);
@@ -1356,6 +1422,14 @@ ${WS_PARSE_GUIDE}`;
         </div>
       </header>
 
+      {restoredAt && page !== "home" && (
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,flexWrap:"wrap",background:"#e1f5ee",color:"#0a6554",fontSize:13,padding:"8px 16px"}}>
+          <span>Restored your work from {savedLabel(restoredAt)}. Everything you enter is saved as you go.</span>
+          <button onClick={()=>setRestoredAt(null)} style={{background:"none",border:"none",color:"#0a6554",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>OK</button>
+          <button onClick={startOver} style={{background:"none",border:"none",color:"#7a8a9a",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>Start over</button>
+        </div>
+      )}
+
       {/* ── HELP MODAL ── */}
       {showHelp && (
         <div className="help-overlay" onClick={()=>setShowHelp(false)}>
@@ -1422,6 +1496,13 @@ ${WS_PARSE_GUIDE}`;
         <div className="home">
           <h1>Generate<br />a Document</h1>
           <p>Build a branded assessment or proposal in minutes. Upload your files and let Claude do the writing.</p>
+          {hasWork && (
+            <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:"#e1f5ee",border:"1px solid #1D9E75",borderRadius:8,padding:"12px 16px",margin:"0 auto 22px",maxWidth:720,textAlign:"left"}}>
+              <span style={{flex:1,minWidth:200,fontSize:14,color:"#0a6554"}}>Your work on <strong>{workTitle}</strong> is saved.</span>
+              <button className="btn-revise" onClick={()=>setPage(customPrompt.trim()||customFiles.length ? "custom" : docType ? "form" : "intake")}>Continue</button>
+              <button onClick={startOver} style={{background:"none",border:"none",color:"#7a8a9a",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>Discard</button>
+            </div>
+          )}
           <div className="doc-cards">
             {DOC_TYPES.map(dt=>(
               <div key={dt.id} className="doc-card" onClick={()=>startIntake(dt.id)}>
@@ -1601,7 +1682,7 @@ ${WS_PARSE_GUIDE}`;
       {page==="design" && (
         <DesignRequest
           onBack={()=>setPage("home")}
-          defaultName={formData.generatedBy || (()=>{ try { return localStorage.getItem("sg_generated_by") || ""; } catch(e) { return ""; } })()}
+          defaultName={formData.generatedBy || (()=>{ try { return store.get("sg_generated_by") || ""; } catch(e) { return ""; } })()}
           email={{ service: EMAILJS_SERVICE, template: EMAILJS_DESIGN_TEMPLATE, load: loadEmailJS }}
         />
       )}

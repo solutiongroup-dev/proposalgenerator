@@ -1,4 +1,5 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { loadDraft, saveDraft, clearDraft, savedLabel, store } from "./draft.js";
 
 // ── Design Request ───────────────────────────────────────────────────────────
 // For documents that need photos, custom layout or design work and don't fit the
@@ -77,6 +78,34 @@ export default function DesignRequest({ onBack, defaultName, email }) {
   const [status, setStatus] = useState("");
   const [done, setDone] = useState(null);           // { id, brief, briefUrl }
   const inputRef = useRef();
+
+  // Autosave the request (fields and files) so a failed send or a reload loses nothing
+  const [draftReady, setDraftReady] = useState(false);
+  const [restoredAt, setRestoredAt] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadDraft("customRequest").then(d => {
+      if (cancelled) return;
+      if (d && (Object.values(d.f || {}).some(v => String(v || "").trim() && !["Normal", "Solution Group", "Clean corporate", "Word (.docx)", defaultName].includes(v)) || d.files?.length)) {
+        setF(p => ({ ...p, ...d.f }));
+        setFiles((d.files || []).map(x => ({ ...x, progress: 0, url: "" })));
+        setRestoredAt(d.savedAt);
+      }
+      setDraftReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!draftReady || done) return;
+    const t = setTimeout(() => saveDraft("customRequest", { f, files: files.map(({ file, role, note, tooBig }) => ({ file, role, note, tooBig })) }), 400);
+    return () => clearTimeout(t);
+  }, [draftReady, done, f, files]);
+  const clearForm = () => {
+    if (!window.confirm("Clear this request and start over?")) return;
+    clearDraft("customRequest");
+    setF({ requesterName: defaultName || "", priority: "Normal", brand: "Solution Group", style: "Clean corporate", format: "Word (.docx)", kind: "" });
+    setFiles([]); setErrors({}); setErr(""); setRestoredAt(null);
+  };
 
   const set = (k, v) => { setF(p => ({ ...p, [k]: v })); setErrors(e => ({ ...e, [k]: false })); setErr(""); };
   const inp = (k, props = {}) => <input className={errors[k] ? "err" : ""} value={f[k] || ""} onChange={e => set(k, e.target.value)} {...props} />;
@@ -160,7 +189,8 @@ export default function DesignRequest({ onBack, defaultName, email }) {
         brief: brief.length > MAX ? brief.slice(0, MAX) + `\n\n[Brief continues: open the full brief at ${briefUrl}]` : brief,
       });
 
-      try { localStorage.setItem("sg_generated_by", f.requesterName); } catch (e) {}
+      store.set("sg_generated_by", f.requesterName);
+      clearDraft("customRequest");   // sent: nothing left to recover
       setDone({ id, brief, briefUrl });
     } catch (e) {
       const msg = e?.text || e?.message || String(e);
@@ -194,6 +224,12 @@ export default function DesignRequest({ onBack, defaultName, email }) {
     <div className="custom-page">
       <button className="form-back" onClick={onBack}>← Back</button>
       <div className="custom-title">Custom Request</div>
+      {restoredAt && (
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", background: "#e1f5ee", color: "#0a6554", fontSize: 13, padding: "8px 12px", borderRadius: 6, margin: "6px 0 14px" }}>
+          <span style={{ flex: 1 }}>Restored your request from {savedLabel(restoredAt)}, including attached files.</span>
+          <button onClick={clearForm} style={{ background: "none", border: "none", color: "#7a8a9a", cursor: "pointer", fontSize: 13, textDecoration: "underline", fontFamily: "inherit" }}>Start over</button>
+        </div>
+      )}
       <div className="custom-sub">
         For documents that need photos, custom layout or design work and don't fit the proposal templates.
         This goes straight to Chase. Be specific: the more complete this is, the sooner the finished document comes back,

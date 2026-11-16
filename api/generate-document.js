@@ -644,7 +644,7 @@ function buildProject(cfg) {
 }
 
 // ── Claude API call ───────────────────────────────────────────────────────────
-function callClaude(messages, maxTokens = 8192) {
+function callClaudeOnce(messages, maxTokens) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages });
     const req = https.request({
@@ -654,18 +654,53 @@ function callClaude(messages, maxTokens = 8192) {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(parsed.error.message));
-          if (parsed.stop_reason === 'max_tokens') return reject(new Error('The document was too long to finish in one pass. Try a shorter request or fewer source files.'));
-          resolve(parsed.content.map(b => b.text || '').join('\n'));
-        } catch (e) { reject(e); }
+        let parsed;
+        try { parsed = JSON.parse(data); }
+        catch (e) { return reject(Object.assign(new Error(`Claude returned an unreadable response (${res.statusCode}).`), { retry: res.statusCode >= 500 })); }
+        if (parsed.error) {
+          // 529 overloaded, 429 rate limited and 5xx are temporary
+          const retry = res.statusCode === 529 || res.statusCode === 429 || res.statusCode >= 500;
+          return reject(Object.assign(new Error(retry ? 'Claude is busy right now. Wait a minute and try again.' : parsed.error.message), { retry }));
+        }
+        if (parsed.stop_reason === 'max_tokens') return reject(new Error('The document was too long to finish in one pass. Try a shorter request or fewer source files.'));
+        resolve(parsed.content.map(b => b.text || '').join('\n'));
       });
     });
-    req.on('error', reject);
+    req.on('error', e => reject(Object.assign(e, { retry: true })));
     req.write(body);
     req.end();
   });
+}
+
+// One retry for temporary failures (overload, network blip)
+async function callClaude(messages, maxTokens = 8192) {
+  try { return await callClaudeOnce(messages, maxTokens); }
+  catch (e) {
+    if (!e.retry) throw e;
+    console.warn('Claude call failed, retrying once:', e.message);
+    await new Promise(r => setTimeout(r, 3000));
+    return callClaudeOnce(messages, maxTokens);
+  }
+}
+
+// Read the JSON config from Claude's reply, tolerating fences and small slips
+// (trailing commas, smart quotes). Returns null if it still can't be read.
+function parseConfig(raw) {
+  const m = String(raw || '').match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const attempts = [m[0], m[0].replace(/,\s*([}\]])/g, '$1').replace(/[\u201C\u201D]/g, '"')];
+  for (const t of attempts) { try { return JSON.parse(t); } catch (e) {} }
+  return null;
+}
+
+// Ask Claude for a config; if the reply can't be read, ask once more
+async function getConfig(prompt) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const cfg = parseConfig(await callClaude([{ role: 'user', content: prompt }]));
+    if (cfg) return cfg;
+    console.warn(`Unreadable config from Claude (attempt ${attempt})`);
+  }
+  throw new Error('Claude returned a document that could not be read. Please try again.');
 }
 
 // ── Config extraction prompts ─────────────────────────────────────────────────
@@ -967,10 +1002,7 @@ module.exports = async function (req, res) {
       if (docType === 'watersolve' && !Array.isArray(previousConfig.line_items)) {
         previousConfig.line_items = parseLineItems(formData?.wsLineItems);
       }
-      const raw = await callClaude([{ role: 'user', content: revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }) }]);
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('Revision did not return valid JSON.');
-      cfg = JSON.parse(jsonMatch[0]);
+      cfg = await getConfig(revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }));
     } else {
       // ── GENERATION MODE: build config from form data ──
       let prompt;
@@ -1030,10 +1062,7 @@ Return ONLY the document content — no preamble, no explanation.`
       }
       else throw new Error(`Unknown docType: ${docType}`);
 
-      const raw = await callClaude([{ role: 'user', content: prompt }]);
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('Claude did not return valid JSON config.');
-      cfg = JSON.parse(jsonMatch[0]);
+      cfg = await getConfig(prompt);
     }
 
     // On first generation: use formData for include_signature (form dropdown is authoritative)

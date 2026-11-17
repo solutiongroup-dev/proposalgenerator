@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadDraft, saveDraft, clearDraft, store } from "./draft.js";
+import { CompanyPicker, emailDomainOf } from "./CompanyPicker.jsx";
 
 // ── Sales lead (prequalification) ────────────────────────────────────────────
 // Field staff enter a new lead; /api/lead creates the deal in the Project or
@@ -29,20 +30,6 @@ const css = `
   .lead-submit:disabled { opacity: 0.6; cursor: default; }
   .lead-msg { overflow-wrap: anywhere; border-radius: 8px; padding: 11px 14px; font-size: 14px; line-height: 1.5; margin-top: 14px; }
   .lead-msg.bad { color: #b42318; background: #fef3f2; border: 1px solid #fecdca; }
-  .co-list { border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 8px; overflow: hidden; }
-  .co-list.err { border-color: #e24b4a; }
-  .co-head { font-size: 12px; color: #4a5568; background: #f8f9fc; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
-  .co-item { display: block; width: 100%; text-align: left; background: white; border: none; border-bottom: 1px solid #edf0f5; padding: 10px 12px; font-family: inherit; cursor: pointer; }
-  .co-item:last-child { border-bottom: none; }
-  .co-item:hover { background: #f2f6fc; }
-  .co-item strong { display: block; font-size: 15px; color: #1a2332; font-weight: 600; }
-  .co-item span { font-size: 12px; color: #7a8a9a; }
-  .co-item .tag { display: inline-block; font-size: 10px; font-weight: 600; color: #7a4b00; background: #fffaeb; border-radius: 3px; padding: 1px 5px; margin-left: 6px; }
-  .co-item.new strong { color: ${BLUE}; }
-  .co-item.new.on { background: #eef3fb; }
-  .co-picked { display: flex; align-items: center; gap: 10px; margin-top: 8px; background: #e1f5ee; border: 1px solid #1D9E75; border-radius: 8px; padding: 10px 12px; font-size: 14px; color: #0a6554; }
-  .co-picked button { margin-left: auto; background: none; border: none; color: #0a6554; text-decoration: underline; cursor: pointer; font-family: inherit; font-size: 13px; }
-  .co-hint { font-size: 12px; color: #7a8a9a; margin-top: 5px; }
   .lead-msg.warn { color: #7a4b00; background: #fffaeb; border: 1px solid #fedf89; }
   @media (max-width: 560px) { .lead-grid { grid-template-columns: 1fr; } .lead-card { padding: 18px 16px; } }
 `;
@@ -80,29 +67,14 @@ export default function LeadForm({ onBack }) {
     return () => clearTimeout(t);
   }, [f, ready, done]);
 
-  // Search HubSpot for the company as it's typed, plus every company on the email's domain
-  const [suggest, setSuggest] = useState({ q: "", list: [], loading: false, error: "" });
-  const emailDomain = (/^[^\s@]+@([^\s@]+\.[^\s@]+)$/.exec(f.email.trim()) || [])[1]?.toLowerCase() || "";
-  useEffect(() => {
-    const q = f.companyName.trim();
-    if (f.companyId || (q.length < 2 && !emailDomain)) { setSuggest({ q: "", list: [], loading: false, error: "" }); return; }
-    const key = q + "|" + emailDomain;
-    setSuggest(prev => ({ ...prev, loading: true }));
-    const t = setTimeout(() => {
-      fetch(`/api/lead?company=${encodeURIComponent(q)}&domain=${encodeURIComponent(emailDomain)}`)
-        .then(r => r.json())
-        .then(d => setSuggest({ q: key, list: d.companies || [], loading: false, error: d.searchError || "" }))
-        .catch(() => setSuggest({ q: key, list: [], loading: false, error: "Could not search HubSpot companies" }));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [f.companyName, f.companyId, emailDomain]);
-
-  const pickCompany = c => {
-    setF(prev => ({ ...prev, companyId: c.id, companyName: c.name, newCompanyOk: false,
-      location: prev.location || [c.city, c.state].filter(Boolean).join(", ") }));
+  const emailDomain = emailDomainOf(f.email);
+  const [companyMatches, setCompanyMatches] = useState(0);
+  const onCompany = patch => {
+    setF(prev => ({ ...prev, ...("companyId" in patch ? { companyId: patch.companyId } : {}), ...("companyName" in patch ? { companyName: patch.companyName } : {}),
+      ...("newCompanyOk" in patch ? { newCompanyOk: patch.newCompanyOk } : {}),
+      ...(patch.companyId && !prev.location ? { location: [patch.city, patch.state].filter(Boolean).join(", ") } : {}) }));
     setErrors(prev => ({ ...prev, companyName: false, company: false }));
   };
-  const place = c => [[c.city, c.state].filter(Boolean).join(", "), c.domain].filter(Boolean).join(" · ");
 
   const set = (k, v) => { setF(prev => ({ ...prev, [k]: v })); if (errors[k]) setErrors(prev => ({ ...prev, [k]: false })); };
   const ownerList = owners || [];
@@ -113,7 +85,7 @@ export default function LeadForm({ onBack }) {
     if (busy) return;
     const errs = {};
     if (!f.companyName.trim()) errs.companyName = true;
-    else if (!f.companyId && suggest.list.length && !f.newCompanyOk) errs.company = true;
+    else if (!f.companyId && companyMatches > 0 && !f.newCompanyOk) errs.company = true;
     if (!f.pipeline) errs.pipeline = true;
     if (useFreeText ? !f.ownerName.trim() : !f.ownerId) errs.owner = true;
     if (f.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) errs.email = true;
@@ -192,37 +164,8 @@ export default function LeadForm({ onBack }) {
         <div className="lead-grid">
           <div className="field full">
             <label htmlFor="l-co">Company name <span className="req">*</span></label>
-            {f.companyId ? (
-              <div className="co-picked">
-                <span>✓ Existing HubSpot company: <strong>{f.companyName}</strong></span>
-                <button type="button" onClick={() => setF(prev => ({ ...prev, companyId: "" }))}>Change</button>
-              </div>
-            ) : (<>
-              <input id="l-co" className={errors.companyName ? "err" : ""} value={f.companyName} autoComplete="off"
-                onChange={e => { const v = e.target.value; setF(prev => ({ ...prev, companyName: v, newCompanyOk: false })); setErrors(prev => ({ ...prev, companyName: false, company: false })); }} />
-              <div className="co-hint">Start typing to find it in HubSpot. For a company with several sites, use <em>Company – Site</em>, like “Agropur – Hull”.</div>
-              {suggest.list.length > 0 && (
-                <div className={"co-list" + (errors.company ? " err" : "")}>
-                  <div className="co-head">Already in HubSpot. Tap the right one so no duplicate is created:</div>
-                  {suggest.list.map(c => (
-                    <button type="button" key={c.id} className="co-item" onClick={() => pickCompany(c)}>
-                      <strong>{c.name}{c.sameDomain && <span className="tag">same email domain</span>}</strong>
-                      <span>{place(c) || "No location in HubSpot"}</span>
-                    </button>
-                  ))}
-                  {f.companyName.trim() && (
-                    <button type="button" className={"co-item new" + (f.newCompanyOk ? " on" : "")} onClick={() => { set("newCompanyOk", !f.newCompanyOk); setErrors(prev => ({ ...prev, company: false })); }}>
-                      <strong>{f.newCompanyOk ? "✓ " : "+ "}None of these. Create new company “{f.companyName.trim()}”</strong>
-                      <span>Choose this only for a different company or a different site.</span>
-                    </button>
-                  )}
-                </div>
-              )}
-              {!suggest.loading && !suggest.error && suggest.q && suggest.list.length === 0 && f.companyName.trim().length >= 2 && (
-                <div className="co-hint">Not in HubSpot yet. A new company will be created.</div>
-              )}
-              {suggest.error && <div className="co-hint" style={{ color: "#7a4b00" }}>{suggest.error}. A company with exactly this name will be reused; otherwise a new one is created.</div>}
-            </>)}
+            <CompanyPicker inputId="l-co" inputClassName={errors.companyName ? "err" : ""} domain={emailDomain} error={!!errors.company}
+              value={{ companyId: f.companyId, companyName: f.companyName, newCompanyOk: f.newCompanyOk }} onChange={onCompany} onMatches={setCompanyMatches} />
           </div>
           <div className="field full">
             <label htmlFor="l-loc">Location <span className="opt">city, state</span></label>

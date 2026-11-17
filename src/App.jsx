@@ -13,6 +13,7 @@ const SG_BORDER_GRAY = "#CCCCCC";
 import SG_LOGO from "./sg_logo.png";
 import { signOut } from "./Login.jsx";
 import LeadForm from "./LeadForm.jsx";
+import { CompanyPicker, DealPicker, emailDomainOf } from "./CompanyPicker.jsx";
 
 
 const styles = `
@@ -817,6 +818,8 @@ export default function App() {
   const [customGenerating, setCustomGenerating] = useState(false);
   const [showHelp,     setShowHelp]     = useState(false);
   const [skipHubspot,  setSkipHubspot]  = useState(false);
+  const [hsMatches,    setHsMatches]    = useState(0);    // existing companies listed in the HubSpot section
+  const [hsDealCount,  setHsDealCount]  = useState(0);    // open deals of the picked company (-1 while loading)
   const [hubspotStatus, setHubspotStatus] = useState(null); // null | {state:'working'|'done'|'error', text}
   const emailTimerRef = useRef(null);
 
@@ -1213,20 +1216,39 @@ ${WS_PARSE_GUIDE}`;
   };
 
   // ── generate ──
+  useEffect(() => {
+    if (page !== "form" || formData.hsCompanyTouched || formData.hsCompanyId) return;
+    const name = (formData.clientShortName || formData.clientLegalName || formData.clientName || "").trim();
+    if (name && name !== formData.hsCompanyName) setFormData(prev => ({ ...prev, hsCompanyName: name }));
+  }, [page, formData.clientShortName, formData.clientLegalName, formData.clientName, formData.hsCompanyTouched, formData.hsCompanyId]);
+
+  const usesHubspot = docType && docType !== "assessment" && !skipHubspot;
+  function needsHubspotChoice() {
+    if (!usesHubspot || lastDealId) return "";   // revisions keep updating the same deal
+    if (!formData.hsCompanyId && !String(formData.hsCompanyName || "").trim()) return "HubSpot company";
+    if (!formData.hsCompanyId && hsMatches > 0 && !formData.hsNewCompanyOk) return "HubSpot company: pick it from the list, or choose “Create new company”";
+    if (formData.hsCompanyId && hsDealCount < 0) return "HubSpot deal: wait for the company's deals to load";
+    if (formData.hsCompanyId && hsDealCount > 0 && !formData.hsDealId) return "HubSpot deal: pick the deal this document is for, or “New deal”";
+    return "";
+  }
+
   const validate = () => {
     const errs={};
     allFields.filter(f=>f.required && f.type !== "hidden").forEach(f=>{ if(!formData[f.key]?.toString().trim()) errs[f.key]=true; });
     const needsItems = docType === "watersolve" && wsItemsTotal(parseWsItems(formData.wsLineItems)) <= 0;
     if (needsItems) errs.wsLineItems = true;
+    // HubSpot: the company (and deal) must be chosen, so nothing is guessed or duplicated
+    const hsProblem = needsHubspotChoice();
+    if (hsProblem) errs.hubspot = true;
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
-      const missingLabels = [...allFields.filter(f => f.required && f.type !== "hidden" && errs[f.key]).map(f => f.label), ...(needsItems ? ["Pricing line items (at least one priced item)"] : [])];
+      const missingLabels = [...allFields.filter(f => f.required && f.type !== "hidden" && errs[f.key]).map(f => f.label), ...(needsItems ? ["Pricing line items (at least one priced item)"] : []), ...(hsProblem ? [hsProblem] : [])];
       const msg = missingLabels.length === 1
         ? `Please fill in the required field: ${missingLabels[0]}`
         : `Please fill in all required fields before generating:\n• ${missingLabels.join('\n• ')}`;
       setGenErr(msg);
       // Scroll to first error field
-      const firstKey = allFields.find(f => f.required && f.type !== "hidden" && errs[f.key])?.key || (needsItems ? "wsLineItems" : null);
+      const firstKey = allFields.find(f => f.required && f.type !== "hidden" && errs[f.key])?.key || (needsItems ? "wsLineItems" : null) || (hsProblem ? "hubspot" : null);
       if (firstKey) {
         const el = document.querySelector(`[data-field="${firstKey}"]`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1343,6 +1365,10 @@ ${WS_PARSE_GUIDE}`;
             projectLengthDays:    formData.projectLengthDays,
             contractLengthDays:   formData.contractLengthDays,
             existingDealId:       lastDealId,
+            companyId:            formData.hsCompanyId || "",
+            newCompanyName:       formData.hsCompanyId ? "" : (formData.hsCompanyName || formData.clientLegalName || formData.clientName || ""),
+            dealChoice:           formData.hsCompanyId ? (formData.hsDealId || "new") : "new",
+            hubspotCompanyName:   formData.hsCompanyName || "",
             generatedBy:          formData.generatedBy,
             dealSource:           formData.dealSource,
           }),
@@ -1361,7 +1387,9 @@ ${WS_PARSE_GUIDE}`;
               .then(({ ok, j }) => {
                 if (!ok) throw new Error(j?.error || "Attachment failed");
                 console.log(`✓ Document attached to deal ${data.dealId} (file ${j.fileId})`);
-                setHubspotStatus({ state:"done", text:`Document attached to HubSpot deal "${data.dealName}"${data.pipeline ? ` in the ${data.pipeline} pipeline` : ""}` });
+                const co = data.company ? ` · ${data.company.existing ? "linked to" : "new company"} ${data.company.name}` : "";
+                const warn = data.warnings?.length ? ` · ${data.warnings.join(" ")}` : "";
+                setHubspotStatus({ state: data.warnings?.length ? "error" : "done", text:`Document attached to HubSpot deal "${data.dealName}"${data.pipeline ? ` in the ${data.pipeline} pipeline` : ""}${co}${warn}` });
               })
               .catch(e => {
                 console.warn('HubSpot attach failed:', e.message);
@@ -1871,6 +1899,42 @@ ${WS_PARSE_GUIDE}`;
                 );
               })()}
             </div>
+
+            {/* HUBSPOT: which company and deal this document belongs to */}
+            {docType !== "assessment" && (
+              <div className="section" data-field="hubspot">
+                <div className="section-title">HubSpot</div>
+                {skipHubspot ? (
+                  <div className="co-hint" style={{fontSize:13,color:"#7a8a9a"}}>HubSpot push is turned off for this document.</div>
+                ) : lastDealId ? (
+                  <div className="co-hint" style={{fontSize:13,color:"#4a5568"}}>New versions of this document update the same HubSpot deal{formData.hsCompanyName ? <> for <strong>{formData.hsCompanyName}</strong></> : null}.</div>
+                ) : (
+                  <div className="field-grid" style={{gridTemplateColumns:"1fr"}}>
+                    <div className="field">
+                      <label htmlFor="hs-co">Company in HubSpot <span className="req">*</span></label>
+                      <CompanyPicker inputId="hs-co" inputClassName={errors.hubspot && !formData.hsCompanyId && !String(formData.hsCompanyName||"").trim() ? "err" : ""}
+                        domain={emailDomainOf(formData.customerContactEmail)} error={!!errors.hubspot}
+                        value={{ companyId: formData.hsCompanyId || "", companyName: formData.hsCompanyName ?? "", newCompanyOk: !!formData.hsNewCompanyOk }}
+                        onMatches={setHsMatches}
+                        onChange={patch => {
+                          setFormData(prev => ({ ...prev, hsCompanyTouched: true, hsDealId: "companyId" in patch ? "" : prev.hsDealId,
+                            ...("companyId" in patch ? { hsCompanyId: patch.companyId } : {}),
+                            ...("companyName" in patch ? { hsCompanyName: patch.companyName } : {}),
+                            ...("newCompanyOk" in patch ? { hsNewCompanyOk: patch.newCompanyOk } : {}) }));
+                          setErrors(prev => ({ ...prev, hubspot: false }));
+                        }} />
+                    </div>
+                    {formData.hsCompanyId && (
+                      <div className="field">
+                        <label>Deal <span className="req">*</span></label>
+                        <DealPicker companyId={formData.hsCompanyId} value={formData.hsDealId || ""} error={!!errors.hubspot} onDeals={setHsDealCount}
+                          onChange={id => { setField("hsDealId", id); setErrors(prev => ({ ...prev, hubspot: false })); }} />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* DOC DETAILS */}
             {docType==="watersolve" ? (

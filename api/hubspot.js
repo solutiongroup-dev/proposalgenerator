@@ -38,6 +38,7 @@ module.exports.config = {
 
 // HTTP helper is shared with the lead route
 const { hubspotRequest } = require('./_hubspot');
+const { FREE_MAIL, useOrCreateCompany, pipelineStages, link } = require('./_crm');
 
 // ── Find or create contact ────────────────────────────────────────────────────
 async function findOrCreateContact(email, firstName, lastName) {
@@ -76,7 +77,7 @@ async function findOwnerByEmail(email) {
 async function findDealById(dealId) {
   if (!dealId) return null;
   try {
-    const result = await hubspotRequest('GET', `/crm/v3/objects/deals/${dealId}`);
+    const result = await hubspotRequest('GET', `/crm/v3/objects/deals/${encodeURIComponent(dealId)}?properties=dealname,pipeline,dealstage`);
     return result?.id ? result : null;
   } catch(e) { return null; }
 }
@@ -146,11 +147,18 @@ module.exports = async function (req, res) {
       existingDealId, generatedBy, dealSource,
       managementCost, equipmentCost, laborCost, technologyCost,
       projectLengthDays, contractLengthDays,
+      companyId: rawCompanyId, newCompanyName, dealChoice: rawDealChoice, hubspotCompanyName,
     } = body;
+    // From the form's HubSpot section: the company picked (or a confirmed new one) and the
+    // deal to update ('new' for a new deal). Older pages send neither and fall back to name matching.
+    const companyId = /^\d{1,20}$/.test(String(rawCompanyId || '')) ? String(rawCompanyId) : '';
+    const dealChoice = rawDealChoice === 'new' || /^\d{1,20}$/.test(String(rawDealChoice || '')) ? String(rawDealChoice) : '';
+    const usesPicker = Boolean(companyId || (newCompanyName && String(newCompanyName).trim()));
 
     const pipelineConfig = await resolvePipeline(pipeline, docType);
     const isProjectLike = pipelineConfig.key !== 'Recurring';
-    const effectiveClientName = clientName || clientShortName || 'Unknown Client';
+    // New deals are named after the HubSpot company picked (e.g. "Agropur - Hull") so sites stay distinct
+    const effectiveClientName = (usesPicker && String(hubspotCompanyName || newCompanyName || '').trim()) || clientName || clientShortName || 'Unknown Client';
     const dealName = buildDealName(effectiveClientName, docType, projectTitle);
 
     const parseCost = v => v ? parseFloat(String(v).replace(/[$,]/g, '')) || undefined : undefined;
@@ -191,55 +199,78 @@ module.exports = async function (req, res) {
 
     let dealId;
     let isNew = false;
+    const warnings = [];
 
-    // Check 1: session-level existingDealId (fastest — same session)
+    // Owner = Primary SG Contact; falls back to the default owner (Chase Cochran)
+    const DEFAULT_OWNER_ID = '163848624';
+    let ownerId = null;
+    try { ownerId = await findOwnerByEmail(sgContactEmail); } catch(e) {}
+    if (!ownerId) ownerId = DEFAULT_OWNER_ID;
+
+    // 1. Same session (a revision of the document just generated)
     let existingDeal = await findDealById(existingDealId);
-
-    // Check 2: fuzzy match by client name across all deals (cross-session duplicate prevention)
-    if (!existingDeal) {
+    // 2. The deal picked in the form
+    if (!existingDeal && dealChoice && dealChoice !== 'new') {
+      existingDeal = await findDealById(dealChoice);
+      if (!existingDeal) warnings.push('The deal picked in the form was not found in HubSpot, so a new deal was created.');
+    }
+    // 3. Older pages without the HubSpot section: match by client name
+    if (!existingDeal && !usesPicker && !dealChoice) {
       const fuzzyId = await findExistingDealByClient(effectiveClientName, pipelineConfig.pipelineId);
       if (fuzzyId) existingDeal = await findDealById(fuzzyId);
     }
 
     if (existingDeal) {
-      const foundId = existingDeal.id || existingDealId;
-      console.log('Updating existing deal:', foundId);
-      await hubspotRequest('PATCH', `/crm/v3/objects/deals/${foundId}`, { properties: dealProps });
-      dealId = foundId;
+      dealId = existingDeal.id;
+      const cur = existingDeal.properties || {};
+      const update = { ...dealProps };
+      delete update.dealname;   // keep the name people already know it by
+      // Never move a deal backward (e.g. from Negotiation back to Proposal) within the same pipeline
+      if (cur.pipeline === pipelineConfig.pipelineId) {
+        try {
+          const stages = (await pipelineStages())[cur.pipeline]?.stages || {};
+          const now = stages[cur.dealstage]?.order, target = stages[pipelineConfig.stageId]?.order;
+          if (now != null && target != null && now > target) delete update.dealstage;
+        } catch (e) { console.warn('Stage order check failed:', e.message); }
+      }
+      console.log('Updating existing deal:', dealId);
+      await hubspotRequest('PATCH', `/crm/v3/objects/deals/${dealId}`, { properties: update });
     } else {
       console.log('Creating new deal:', dealName);
-      // Owner = Primary SG Contact on the deal
-      // Falls back to default owner (Chase Cochran) if lookup fails due to scope limitations
-      const DEFAULT_OWNER_ID = '163848624';
-      let ownerId = null;
-      try { ownerId = await findOwnerByEmail(sgContactEmail); } catch(e) {}
-      if (!ownerId) ownerId = DEFAULT_OWNER_ID;
       if (ownerId) dealProps.hubspot_owner_id = ownerId;
-
       const deal = await hubspotRequest('POST', '/crm/v3/objects/deals', { properties: dealProps });
       dealId = deal.id;
       isNew = true;
       console.log('Deal created:', dealId);
+    }
 
-      // Associate contact
-      const nameParts = (customerContactName || '').trim().split(/\s+/);
-      const contactId = await findOrCreateContact(
-        customerContactEmail,
-        nameParts[0] || '',
-        nameParts.slice(1).join(' ') || ''
-      );
-      if (contactId && dealId) {
-        try {
-          await hubspotRequest('PUT',
-            `/crm/v3/objects/deals/${dealId}/associations/contacts/${contactId}/deal_to_contact`,
-            {}
-          );
-          console.log('Contact associated:', contactId);
-        } catch(e) { console.warn('Contact association failed:', e.message); }
+    // Company: the one picked in the form, or the confirmed new one
+    let company = null;
+    if (usesPicker) {
+      const emailDomain = String(customerContactEmail || '').toLowerCase().split('@')[1] || '';
+      try {
+        company = await useOrCreateCompany({
+          companyId, companyName: String(newCompanyName || effectiveClientName).trim(),
+          location: '', domain: emailDomain && !FREE_MAIL.test(emailDomain) ? emailDomain : '', ownerId,
+        });
+        await link('deals', dealId, 'companies', company.id);
+      } catch (e) {
+        console.warn('Company step failed:', e.message);
+        warnings.push(e.status === 403 ? 'The company could not be linked (the HubSpot private app is missing a permission).' : `The company could not be linked: ${e.message}`);
       }
     }
 
-    res.status(200).json({ success: true, dealId, dealName, isNew, pipeline: pipelineConfig.label || pipelineConfig.key });
+    // Contact, linked to the deal and the company
+    const nameParts = (customerContactName || '').trim().split(/\s+/);
+    const contactId = await findOrCreateContact(customerContactEmail, nameParts[0] || '', nameParts.slice(1).join(' ') || '');
+    if (contactId) {
+      try { await link('deals', dealId, 'contacts', contactId); console.log('Contact associated:', contactId); }
+      catch(e) { console.warn('Contact association failed:', e.message); }
+      if (company) await link('contacts', contactId, 'companies', company.id).catch(e => console.warn('Contact-company link failed:', e.message));
+    }
+
+    res.status(200).json({ success: true, dealId, dealName: existingDeal?.properties?.dealname || dealName, isNew, pipeline: pipelineConfig.label || pipelineConfig.key,
+      company: company && { id: company.id, name: company.name, existing: company.existing }, warnings });
 
   } catch(err) {
     console.error('HubSpot error:', err.message);

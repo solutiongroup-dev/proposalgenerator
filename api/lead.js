@@ -1,6 +1,8 @@
 /**
  * SG Portal — sales lead (prequalification) entry
  * GET  /api/lead  → { owners: [{id, name, email}] } for the "Solution Group lead" picker
+ * GET  /api/lead?company=…&domain=…  → matching HubSpot companies (lead and proposal forms)
+ * GET  /api/lead?deals=<companyId>   → that company's open deals (proposal form)
  * POST /api/lead  → creates the deal in the chosen pipeline's Prequalification stage,
  *                   finds or creates the company and contact, and links all three.
  *
@@ -10,14 +12,12 @@
 
 const { requireAuth } = require('./_auth');
 const { hubspotRequest } = require('./_hubspot');
+const { FREE_MAIL, splitLocation, searchOne, searchCompanies, useOrCreateCompany, companyDeals, link, dealUrl, scopeHint } = require('./_crm');
 
 const PIPELINES = {
   Project:   { id: '2277462760', label: 'Project' },
   Recurring: { id: '2276783856', label: 'Recurring' },
 };
-
-// Free email providers: their domain says nothing about the company
-const FREE_MAIL = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|aol|icloud|me|mac|comcast|att|sbcglobal|verizon|bellsouth|charter|cox|earthlink|protonmail|proton|gmx|mail|zoho)\./i;
 
 // ── Owners (Solution Group lead) ──────────────────────────────────────────────
 async function listOwners() {
@@ -47,66 +47,6 @@ async function prequalStage(pipelineKey) {
     throw Object.assign(new Error(`The ${data.label || p.label} pipeline in HubSpot has no Prequalification stage. Its stages are: ${stages.map(s => s.label).join(', ')}.`), { status: 500 });
   }
   return (stageCache[pipelineKey] = { pipelineId: p.id, pipelineLabel: data.label || p.label, stageId: stage.id, stageLabel: stage.label });
-}
-
-// ── Company ───────────────────────────────────────────────────────────────────
-function splitLocation(location) {
-  const parts = String(location || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) return { city: parts.slice(0, -1).join(', '), state: parts[parts.length - 1] };
-  return parts.length ? { city: parts[0] } : {};
-}
-
-async function searchOne(objectType, propertyName, value, properties) {
-  const r = await hubspotRequest('POST', `/crm/v3/objects/${objectType}/search`, {
-    filterGroups: [{ filters: [{ propertyName, operator: 'EQ', value }] }],
-    properties, limit: 1,
-  });
-  return r.results?.[0] || null;
-}
-
-// Companies matching what's typed, plus every company on the contact's email domain.
-// Several sites can share one domain (Agropur Lake Norden, Agropur Hull…), so the
-// person picks the right one rather than the app guessing.
-async function searchCompanies(q, domain) {
-  const props = ['name', 'domain', 'city', 'state'];
-  const found = new Map();
-  const add = (results, sameDomain) => (results || []).forEach(c => {
-    const p = c.properties || {};
-    const prev = found.get(c.id);
-    found.set(c.id, { id: c.id, name: p.name || '(no name)', domain: p.domain || '', city: p.city || '', state: p.state || '', sameDomain: sameDomain || prev?.sameDomain || false });
-  });
-  const jobs = [];
-  if (q.length >= 2) {
-    jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', { query: q, properties: props, limit: 20 }).then(r => add(r.results)));
-    const word = q.split(/\s+/).find(w => w.length >= 3);
-    if (word) jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', {
-      filterGroups: [{ filters: [{ propertyName: 'name', operator: 'CONTAINS_TOKEN', value: `*${word.replace(/[^\w-]/g, '')}*` }] }],
-      properties: props, limit: 20,
-    }).then(r => add(r.results)).catch(() => {}));
-  }
-  if (domain) jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', {
-    filterGroups: [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: domain }] }],
-    properties: props, limit: 50,
-  }).then(r => add(r.results, true)));
-  await Promise.all(jobs);
-  const ql = q.toLowerCase();
-  return [...found.values()]
-    .sort((a, b) => (b.name.toLowerCase().startsWith(ql) - a.name.toLowerCase().startsWith(ql)) || a.name.localeCompare(b.name))
-    .slice(0, 25);
-}
-
-async function useOrCreateCompany({ companyId, companyName, location, domain, ownerId }) {
-  if (companyId) {
-    const c = await hubspotRequest('GET', `/crm/v3/objects/companies/${companyId}?properties=name`);
-    return { id: c.id, name: c.properties?.name || companyName, existing: true };
-  }
-  // Safety net: a company with exactly this name already exists, so use it instead of a duplicate
-  const same = await searchOne('companies', 'name', companyName, ['name']);
-  if (same) return { id: same.id, name: same.properties?.name || companyName, existing: true };
-  const created = await hubspotRequest('POST', '/crm/v3/objects/companies', {
-    properties: { name: companyName, ...splitLocation(location), ...(domain ? { domain } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}) },
-  });
-  return { id: created.id, name: companyName, existing: false };
 }
 
 // ── Contact ───────────────────────────────────────────────────────────────────
@@ -140,9 +80,6 @@ async function findOrCreateContact({ contactName, email, phone, companyName, own
   return { id: created.id, existing: false };
 }
 
-const link = (from, fromId, to, toId) =>
-  hubspotRequest('PUT', `/crm/v4/objects/${from}/${fromId}/associations/default/${to}/${toId}`);
-
 function parseMoney(v) {
   const s = String(v || '').trim().toLowerCase().replace(/[$,\s]/g, '');
   const m = s.match(/^(\d+(?:\.\d+)?)(k|m|mm)?$/);
@@ -151,27 +88,22 @@ function parseMoney(v) {
   return Math.round(n);
 }
 
-let portalIdCache = null;
-async function dealUrl(dealId) {
-  try {
-    if (!portalIdCache) portalIdCache = (await hubspotRequest('GET', '/account-info/v3/details')).portalId;
-    return portalIdCache ? `https://app.hubspot.com/contacts/${portalIdCache}/record/0-3/${dealId}` : null;
-  } catch (e) { return null; }
-}
-
-function scopeHint(err, what) {
-  if (err.status === 403 || err.category === 'MISSING_SCOPES') {
-    return `${what} (the HubSpot private app is missing a permission; ask Chase to add it)`;
-  }
-  return `${what}: ${err.message}`;
-}
-
 // ── Handler ───────────────────────────────────────────────────────────────────
 module.exports = async function (req, res) {
   if (!requireAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
   if (!process.env.HUBSPOT_API_KEY) { res.status(500).json({ error: 'HUBSPOT_API_KEY not configured.' }); return; }
 
+  if (req.method === 'GET' && req.query && req.query.deals !== undefined) {
+    const id = String(req.query.deals);
+    if (!/^\d{1,20}$/.test(id)) { res.status(400).json({ error: 'Bad company ID' }); return; }
+    try { res.status(200).json({ deals: await companyDeals(id) }); }
+    catch (err) {
+      console.error('Company deals failed:', err.message);
+      res.status(200).json({ deals: [], dealsError: err.status === 403 || err.category === 'MISSING_SCOPES' ? scopeHint(err, "Could not load this company's deals") : "Could not load this company's deals" });
+    }
+    return;
+  }
   if (req.method === 'GET' && req.query && (req.query.company !== undefined || req.query.domain)) {
     const q = String(req.query.company || '').trim().slice(0, 100);
     const d = String(req.query.domain || '').trim().toLowerCase();

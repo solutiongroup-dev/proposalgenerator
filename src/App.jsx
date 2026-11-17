@@ -13,6 +13,7 @@ const SG_BORDER_GRAY = "#CCCCCC";
 import SG_LOGO from "./sg_logo.png";
 import { signOut } from "./Login.jsx";
 import LeadForm from "./LeadForm.jsx";
+import ReviewPage from "./ReviewPage.jsx";
 import { CompanyPicker, DealPicker, emailDomainOf } from "./CompanyPicker.jsx";
 
 
@@ -463,6 +464,7 @@ const PORTAL = [
   { id:"generate", icon:"📄", title:"Generate a proposal", desc:"Assessments, Recurring and Project proposals, and WaterSolve quotes, written by Claude from your notes and files." },
   { id:"files",    icon:"🎨", title:"Custom file creation", desc:"Freeform documents, or files with photos and design work sent to Chase." },
   { id:"lead",     icon:"🤝", title:"Enter a sales lead",   desc:"Log a new opportunity. It goes straight into HubSpot at the Prequalification stage." },
+  { id:"review",   icon:"✅", title:"Review my deals",      desc:"Confirm or update your open HubSpot deals: dates, amount, stage and probability." },
 ];
 
 const EMAILJS_SERVICE  = 'service_71nz8kc';
@@ -864,7 +866,7 @@ export default function App() {
     if (!draftReady) return;   // don't overwrite a saved draft before it has been restored
     const t = setTimeout(() => {
       saveDraft("main", {
-        page: page === "design" ? "files" : page === "lead" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
+        page: page === "design" ? "files" : page === "lead" || page === "review" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
         revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles,
       });
     }, 400);
@@ -1599,6 +1601,9 @@ ${WS_PARSE_GUIDE}`;
 
       {/* ── SALES LEAD ── */}
       {page==="lead" && <LeadForm onBack={()=>setPage("home")} />}
+
+      {/* ── WEEKLY DEAL REVIEW ── */}
+      {page==="review" && <ReviewPage onBack={()=>setPage("home")} />}
 
       {/* ── INTAKE ── */}
       {page==="intake" && (

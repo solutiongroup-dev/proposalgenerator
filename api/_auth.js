@@ -66,4 +66,20 @@ function requireAuth(req, res) {
   return false;
 }
 
-module.exports = { isSignedIn, passwordMatches, sessionCookie, clearCookie, requireAuth };
+// Personal links in the weekly deal-review email: open one owner's review page without
+// signing in. Signed with the same secret, valid for 14 days; changing APP_PASSWORD voids them.
+function ownerLinkToken(ownerId, days = 14) {
+  const key = secret();
+  if (!key) return null;
+  const exp = String(Math.floor(Date.now() / 1000) + days * 86400);
+  return `${exp}.${sign(`review|${ownerId}|${exp}`, key)}`;
+}
+function ownerLinkValid(ownerId, token) {
+  const key = secret();
+  if (!key || !token) return false;
+  const [exp, sig] = String(token).split('.');
+  if (!exp || !sig || !(Number(exp) > Date.now() / 1000)) return false;
+  return safeEqual(sig, sign(`review|${ownerId}|${exp}`, key));
+}
+
+module.exports = { isSignedIn, passwordMatches, sessionCookie, clearCookie, requireAuth, ownerLinkToken, ownerLinkValid };

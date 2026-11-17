@@ -2,6 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import LoginGate from './Login.jsx'
+import ReviewPage from './ReviewPage.jsx'
+import SG_LOGO from './sg_logo.png'
 
 // If the app ever crashes while rendering, show a way back instead of a blank page.
 // Work in progress is autosaved (src/draft.js), so reloading restores it.
@@ -26,12 +28,31 @@ class CrashGuard extends React.Component {
   }
 }
 
+// The personal link in the weekly review email (?review=<owner>&t=<token>) opens that
+// person's review page directly; the link itself is the permission, so no team sign-in.
+const params = new URLSearchParams(window.location.search);
+const reviewLink = params.get('review') && params.get('t') ? { owner: params.get('review'), token: params.get('t') } : null;
+
+function ReviewLinkShell({ owner, token }) {
+  return (
+    <div style={{ minHeight: '100vh', background: '#F2F5FA' }}>
+      <div style={{ background: '#1a3a6b', borderBottom: '4px solid #4FA8A0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ background: 'white', borderRadius: 6, padding: '4px 8px' }}><img src={SG_LOGO} alt="Solution Group" style={{ height: 28, display: 'block' }} /></div>
+        <div style={{ color: 'white', fontWeight: 600, fontFamily: "'DM Sans', sans-serif" }}>SG Portal</div>
+      </div>
+      <ReviewPage linkOwner={owner} linkToken={token} />
+    </div>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <CrashGuard>
-      <LoginGate>
-        <App />
-      </LoginGate>
+      {reviewLink ? <ReviewLinkShell owner={reviewLink.owner} token={reviewLink.token} /> : (
+        <LoginGate>
+          <App />
+        </LoginGate>
+      )}
     </CrashGuard>
   </React.StrictMode>,
 )

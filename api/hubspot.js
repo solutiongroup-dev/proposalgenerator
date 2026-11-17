@@ -248,7 +248,8 @@ module.exports = async function (req, res) {
         companyName: company?.name || effectiveClientName, ownerId,
       });
       contactId = contact?.id || null;
-    } catch (e) { console.warn('Contact step failed:', e.message); warnings.push(`The contact could not be added: ${e.message}`); }
+      if (contact?.emailRejected) warnings.push(`HubSpot says the contact email ${contact.emailRejected} is not valid, so the contact was saved without it. Fix the email on the contact in HubSpot.`);
+    } catch (e) { console.warn('Contact step failed:', e.message); warnings.push(e.friendly ? e.message : `The contact could not be added: ${e.message}`); }
     if (contactId) {
       try { await link('deals', dealId, 'contacts', contactId); console.log('Contact associated:', contactId); }
       catch(e) { console.warn('Contact association failed:', e.message); }

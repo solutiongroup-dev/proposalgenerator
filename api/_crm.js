@@ -131,13 +131,22 @@ async function findOrCreateContact({ contactName, email, phone, jobtitle, compan
     const n = byPhone?.properties || {};
     if (byPhone && (!firstname || String(n.firstname || '').toLowerCase() === firstname.toLowerCase())) return { id: byPhone.id, existing: true };
   }
-  const created = await hubspotRequest('POST', '/crm/v3/objects/contacts', {
-    properties: {
-      ...(email ? { email } : {}), ...(firstname ? { firstname } : {}), ...(lastname ? { lastname } : {}),
-      ...(phone ? { phone } : {}), ...(jobtitle ? { jobtitle } : {}), ...(companyName ? { company: companyName } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}),
-    },
-  });
-  return { id: created.id, existing: false };
+  const props = {
+    ...(firstname ? { firstname } : {}), ...(lastname ? { lastname } : {}),
+    ...(phone ? { phone } : {}), ...(jobtitle ? { jobtitle } : {}), ...(companyName ? { company: companyName } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}),
+  };
+  try {
+    const created = await hubspotRequest('POST', '/crm/v3/objects/contacts', { properties: { ...(email ? { email } : {}), ...props } });
+    return { id: created.id, existing: false };
+  } catch (err) {
+    // HubSpot refuses emails it considers invalid; keep the contact, without the email
+    if (email && /INVALID_EMAIL/.test(err.message) && (firstname || phone)) {
+      const created = await hubspotRequest('POST', '/crm/v3/objects/contacts', { properties: props });
+      return { id: created.id, existing: false, emailRejected: email };
+    }
+    if (email && /INVALID_EMAIL/.test(err.message)) throw Object.assign(new Error(`HubSpot says the email address ${email} is not valid, and there is no contact name or phone to save instead.`), { friendly: true });
+    throw err;
+  }
 }
 
 // ── Open deals linked to a company, for the proposal form's deal picker ─────

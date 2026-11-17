@@ -170,11 +170,12 @@ module.exports = async function (req, res) {
     } catch (err) { console.warn('Company step failed:', err.message); warnings.push(scopeHint(err, 'The company could not be added or linked')); }
     try {
       contact = await findOrCreateContact({ contactName, email, phone, companyName, ownerId });
+      if (contact?.emailRejected) warnings.push(`HubSpot says the email ${contact.emailRejected} is not valid, so the contact was saved without it.`);
       if (contact) {
         await link('deals', deal.id, 'contacts', contact.id);
         if (company) await link('contacts', contact.id, 'companies', company.id).catch(() => {});
       }
-    } catch (err) { console.warn('Contact step failed:', err.message); warnings.push(scopeHint(err, 'The contact could not be added or linked')); }
+    } catch (err) { console.warn('Contact step failed:', err.message); warnings.push(err.friendly ? err.message : scopeHint(err, 'The contact could not be added or linked')); }
 
     res.status(200).json({
       success: true, dealId: deal.id, dealName: dealname, dealUrl: await dealUrl(deal.id),

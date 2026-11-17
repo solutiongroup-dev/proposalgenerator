@@ -1222,7 +1222,8 @@ ${WS_PARSE_GUIDE}`;
   // ── generate ──
   useEffect(() => {
     if (page !== "form" || formData.hsCompanyTouched || formData.hsCompanyId) return;
-    const name = (formData.clientShortName || formData.clientLegalName || formData.clientName || "").trim();
+    // Legal name first: it usually carries the site ("Agropur – Hull"), the short name often doesn't
+    const name = (formData.clientLegalName || formData.clientName || formData.clientShortName || "").trim();
     if (name && name !== formData.hsCompanyName) setFormData(prev => ({ ...prev, hsCompanyName: name }));
   }, [page, formData.clientShortName, formData.clientLegalName, formData.clientName, formData.hsCompanyTouched, formData.hsCompanyId]);
 

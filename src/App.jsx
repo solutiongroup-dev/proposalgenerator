@@ -818,6 +818,7 @@ export default function App() {
 
   const [customPrompt, setCustomPrompt] = useState("");
   const [customFiles,  setCustomFiles]  = useState([]);
+  const [designSeed,   setDesignSeed]   = useState(null);   // Custom Document text/files handed to Custom Request
   const [customErr,    setCustomErr]    = useState("");
   const [customGenerating, setCustomGenerating] = useState(false);
   const [showHelp,     setShowHelp]     = useState(false);
@@ -1772,6 +1773,7 @@ ${WS_PARSE_GUIDE}`;
         <DesignRequest
           onBack={()=>setPage("files")}
           defaultName={formData.generatedBy || (()=>{ try { return store.get("sg_generated_by") || ""; } catch(e) { return ""; } })()}
+          seed={designSeed} onSeedUsed={()=>setDesignSeed(null)}
           email={{ service: EMAILJS_SERVICE, template: EMAILJS_DESIGN_TEMPLATE, load: loadEmailJS }}
         />
       )}
@@ -1785,6 +1787,16 @@ ${WS_PARSE_GUIDE}`;
             Describe exactly what you need — no predefined structure, no required fields.
             Upload any relevant files and tell Claude what to produce.
           </div>
+
+          {/\b(deck|pitch|slides?|presentation|powerpoint|pptx|brochure|flyer|one[- ]pager|infographic|poster|photos?|pictures?|images?|logo|layout|design(ed)?|graphics?)\b/i.test(customPrompt) && (
+            <div style={{background:"#fffaeb",border:"1px solid #fedf89",borderRadius:8,padding:"12px 14px",margin:"0 0 16px",fontSize:14,color:"#7a4b00",lineHeight:1.55}}>
+              <strong>This sounds like a designed piece</strong> (a deck, brochure, layout or photos). Custom Document can only write a plain Word document.
+              Send it as a <strong>Custom Request</strong> instead: it goes to Chase and is built as a real designed deck or document, with your files and photos.
+              <div style={{marginTop:10}}>
+                <button className="btn-revise" onClick={()=>{ setDesignSeed({ text: customPrompt, files: customFiles }); setPage("design"); }}>Send as a Custom Request →</button>
+              </div>
+            </div>
+          )}
 
           <div className="custom-examples">
             <p>Examples — click to use</p>

@@ -46,7 +46,8 @@ Produce a finished, ready-to-send ${f.format && !/not sure/i.test(f.format) ? f.
 - Use the attached photos where the notes say. Download them from the links below. Give each photo a short caption unless told otherwise.
 - Brand: ${f.brand || "Solution Group"}. Design style: ${f.style || "Clean corporate"}.${f.colors ? ` Colors / brand notes: ${f.colors}.` : ""}
 - Audience: ${f.audience || "client decision makers"}. Write for them: plain, confident and specific.
-- Length target: ${f.length || "as long as the content needs, no padding"}.
+- Length target: ${f.length || "as long as the content needs, no padding"}.${/deck|presentation|pptx|slides?/i.test(`${f.kind} ${f.format}`) ? `
+- This is a slide deck: build it as real slides (in Claude, use a Slides deck), one idea per slide, short headlines, visuals and photos over paragraphs, speaker-ready. Export as PowerPoint.` : ""}
 
 ## Document
 ${line("Title", f.title)}${line("Type", f.kind)}${line("Prepared for (client / recipient)", f.client)}${line("Brand", f.brand)}${line("Output format", f.format)}${line("Length", f.length)}${line("Audience", f.audience)}${line("Purpose / what the reader should do", f.purpose)}${block("Outline (sections in order, and what goes in each)", f.outline)}${block("Key messages", f.messages)}${block("Content, facts and numbers", f.content)}${block("Exact text to include word for word", f.exactText)}
@@ -69,7 +70,7 @@ function Field({ label, required, hint, children, full }) {
   );
 }
 
-export default function DesignRequest({ onBack, defaultName, email }) {
+export default function DesignRequest({ onBack, defaultName, email, seed, onSeedUsed }) {
   const [f, setF] = useState(() => ({ requesterName: defaultName || "", priority: "Normal", brand: "Solution Group", style: "Clean corporate", format: "Word (.docx)", kind: "" }));
   const [files, setFiles] = useState([]);          // { file, role, note, progress, url }
   const [errors, setErrors] = useState({});
@@ -90,7 +91,13 @@ export default function DesignRequest({ onBack, defaultName, email }) {
         setF(p => ({ ...p, ...d.f }));
         setFiles((d.files || []).map(x => ({ ...x, progress: 0, url: "" })));
         setRestoredAt(d.savedAt);
+      } else if (seed && (seed.text || seed.files?.length)) {
+        // Handed over from Custom Document: start the brief from what they already wrote
+        const deck = /\b(deck|slides?|presentation|powerpoint|pitch)\b/i.test(seed.text || "");
+        setF(p => ({ ...p, content: seed.text || "", ...(deck ? { kind: "Presentation / slide deck", format: "PowerPoint (.pptx)" } : {}) }));
+        if (seed.files?.length) addFiles(seed.files);
       }
+      if (seed && onSeedUsed) onSeedUsed();
       setDraftReady(true);
     });
     return () => { cancelled = true; };

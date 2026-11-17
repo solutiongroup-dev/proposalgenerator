@@ -1026,19 +1026,41 @@ Write a professional, well-structured document based on the instruction above.
 Return ONLY the document content — no preamble, no explanation.`
         }], 4096);
 
-        // Build a simple branded doc from the raw text
+        // Build a simple branded doc from the raw text. Claude writes Markdown, so turn
+        // **bold** / *italic* into real formatting and drop rules (---), never print the marks.
+        const runs = (text, base = {}) => {
+          const out = [];
+          const re = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*)/g;
+          let last = 0, m;
+          while ((m = re.exec(text))) {
+            if (m.index > last) out.push(new TextRun({ text: text.slice(last, m.index), size: 22, color: GRAY, font: 'Calibri', ...base }));
+            const tok = m[0];
+            const bold = tok.startsWith('**') || tok.startsWith('__');
+            out.push(new TextRun({ text: tok.slice(bold ? 2 : 1, bold ? -2 : -1), size: 22, color: GRAY, font: 'Calibri', ...base, ...(bold ? { bold: true } : { italics: true }) }));
+            last = m.index + tok.length;
+          }
+          if (last < text.length) out.push(new TextRun({ text: text.slice(last), size: 22, color: GRAY, font: 'Calibri', ...base }));
+          return out;
+        };
+        const plain = t => t.replace(/\*\*|__/g, '').replace(/^\*(.+)\*$/, '$1');
         const paragraphs = [];
         for (const line of customRaw.split('\n')) {
-          const trimmed = line.replace(/\u2014/g, ',').replace(/\u2013/g, '-').trim();
+          const trimmed = line.replace(/—/g, ',').replace(/–/g, '-').trim();
           if (!trimmed) { paragraphs.push(new Paragraph({ spacing: sp(0,80), children: [] })); continue; }
+          if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) continue;   // Markdown horizontal rule
           if (trimmed.startsWith('## ')) {
-            paragraphs.push(blueBar(trimmed.replace(/^##\s+/, '')));
+            paragraphs.push(blueBar(plain(trimmed.replace(/^##\s+/, ''))));
           } else if (trimmed.startsWith('# ')) {
-            paragraphs.push(new Paragraph({ spacing: sp(200,120), children: [new TextRun({ text: trimmed.replace(/^#\s+/, ''), bold: true, size: 32, color: BLUE, font: 'Calibri' })] }));
-          } else if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
-            paragraphs.push(new Paragraph({ spacing: sp(0,80), numbering: { reference: 'bullets', level: 0 }, children: [new TextRun({ text: trimmed.replace(/^[-•]\s+/, ''), size: 22, color: GRAY, font: 'Calibri' })] }));
+            paragraphs.push(new Paragraph({ spacing: sp(200,120), children: [new TextRun({ text: plain(trimmed.replace(/^#\s+/, '')), bold: true, size: 32, color: BLUE, font: 'Calibri' })] }));
+          } else if (/^#{3,6}\s/.test(trimmed) || /^\*\*[^*]+\*\*:?$/.test(trimmed)) {
+            // ### heading, or a line that is only bold text: a sub-heading
+            paragraphs.push(new Paragraph({ spacing: sp(160,60), keepNext: true, children: [new TextRun({ text: plain(trimmed.replace(/^#{3,6}\s+/, '')), bold: true, size: 24, color: BLUE, font: 'Calibri' })] }));
+          } else if (/^[-•*]\s+/.test(trimmed)) {
+            paragraphs.push(new Paragraph({ spacing: sp(0,80), numbering: { reference: 'bullets', level: 0 }, children: runs(trimmed.replace(/^[-•*]\s+/, '')) }));
+          } else if (/^\d+[.)]\s+/.test(trimmed)) {
+            paragraphs.push(new Paragraph({ spacing: sp(0,80), indent: { left: 540, hanging: 360 }, children: runs(trimmed) }));
           } else {
-            paragraphs.push(body(trimmed));
+            paragraphs.push(new Paragraph({ spacing: sp(0,120), children: runs(trimmed) }));
           }
         }
 

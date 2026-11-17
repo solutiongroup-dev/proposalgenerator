@@ -4,7 +4,6 @@
  * Creates or updates deals. The document itself is attached by /api/hubspot-attach.
  */
 
-const https = require('https');
 const { requireAuth } = require('./_auth');
 
 const HUBSPOT_TOKEN = process.env.HUBSPOT_API_KEY;
@@ -37,36 +36,8 @@ module.exports.config = {
   api: { bodyParser: { sizeLimit: '2mb' } }
 };
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
-function hubspotRequest(method, path, body) {
-  return new Promise((resolve, reject) => {
-    const payload = body ? JSON.stringify(body) : null;
-    const options = {
-      hostname: 'api.hubapi.com',
-      path,
-      method,
-      headers: {
-        'Authorization': `Bearer ${HUBSPOT_TOKEN}`,
-        'Content-Type': 'application/json',
-        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
-      },
-    };
-    const req = https.request(options, res => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (res.statusCode >= 400) reject(new Error(`HubSpot ${res.statusCode}: ${parsed.message || data}`));
-          else resolve(parsed);
-        } catch(e) { reject(new Error(`HubSpot parse error: ${data}`)); }
-      });
-    });
-    req.on('error', reject);
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
+// HTTP helper is shared with the lead route
+const { hubspotRequest } = require('./_hubspot');
 
 // ── Find or create contact ────────────────────────────────────────────────────
 async function findOrCreateContact(email, firstName, lastName) {

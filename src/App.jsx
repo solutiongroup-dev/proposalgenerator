@@ -12,6 +12,7 @@ const SG_LIGHT_GRAY = "#F2F2F2";
 const SG_BORDER_GRAY = "#CCCCCC";
 import SG_LOGO from "./sg_logo.png";
 import { signOut } from "./Login.jsx";
+import LeadForm from "./LeadForm.jsx";
 
 
 const styles = `
@@ -70,6 +71,8 @@ const styles = `
   .home h1 { font-size: 44px; font-weight: 600; color: ${SG_BLUE}; line-height: 1.1; margin-bottom: 12px; letter-spacing: -0.5px; }
   .home > p { font-size: 15px; color: #5a6a80; max-width: 460px; margin: 0 auto 52px; line-height: 1.65; font-weight: 300; }
   .doc-cards { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; max-width: 960px; margin: 0 auto; }
+  .doc-cards.portal-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-width: 820px; }
+  button.doc-card { font-family: inherit; width: 100%; }
 
   /* INTAKE PAGE */
   .intake-page { max-width: 720px; margin: 0 auto; padding: 60px 24px 80px; }
@@ -343,6 +346,14 @@ const styles = `
   .app-footer span { font-size:11px; color:rgba(255,255,255,0.45); }
 
   @media(max-width:680px){
+    .header{padding:0 12px;gap:10px;height:60px;}
+    .app-footer{padding:10px 16px;flex-wrap:wrap;gap:4px;}
+    .header-logo-wrap{height:40px;padding:4px 8px;}
+    .header-logo-img{height:30px;}
+    .header-divider,.header-sub,.header-right>span{display:none;}
+    .header-title{white-space:nowrap;}
+    .header-right{gap:6px;}
+    .help-btn{padding:5px 10px;white-space:nowrap;}
     .doc-cards{grid-template-columns:1fr 1fr;}
     .field-grid{grid-template-columns:1fr;}
     .water-sidebar{width:60px;}
@@ -442,6 +453,13 @@ const DOC_TYPES = [
   { id:"watersolve", icon:"💧", title:"WaterSolve Proposal", desc:"WaterSolve dredging, dewatering and geotextile tube proposal or sales quote, in WaterSolve format.", badge:"WaterSolve", badgeClass:"badge-proj" },
   { id:"custom",     icon:"✏️", title:"Custom Document",    desc:"Freeform — describe exactly what you need. No predefined structure or required fields.", badge:"Freeform", badgeClass:"badge-o" },
   { id:"design",     icon:"🎨", title:"Custom Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to Chase.", badge:"To Chase", badgeClass:"badge-o" },
+];
+
+// The portal's three starting points
+const PORTAL = [
+  { id:"generate", icon:"📄", title:"Generate a proposal", desc:"Assessments, Recurring and Project proposals, and WaterSolve quotes, written by Claude from your notes and files." },
+  { id:"files",    icon:"🎨", title:"Custom file creation", desc:"Freeform documents, or files with photos and design work sent to Chase." },
+  { id:"lead",     icon:"🤝", title:"Enter a sales lead",   desc:"Log a new opportunity. It goes straight into HubSpot at the Prequalification stage." },
 ];
 
 const EMAILJS_SERVICE  = 'service_71nz8kc';
@@ -841,7 +859,7 @@ export default function App() {
     if (!draftReady) return;   // don't overwrite a saved draft before it has been restored
     const t = setTimeout(() => {
       saveDraft("main", {
-        page: page === "design" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
+        page: page === "design" ? "files" : page === "lead" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
         revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles,
       });
     }, 400);
@@ -865,6 +883,14 @@ export default function App() {
   const clip = t => { t = String(t || "").trim().replace(/\s+/g, " "); return t.length > 40 ? t.slice(0, 40) + "…" : t; };
   const workTitle = formData.clientShortName || formData.clientLegalName || formData.clientName ||
     clip(customPrompt) || clip(pastedText) || files[0]?.name || customFiles[0]?.name || "your document";
+
+  const savedBanner = hasWork && (
+    <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:"#e1f5ee",border:"1px solid #1D9E75",borderRadius:8,padding:"12px 16px",margin:"0 auto 22px",maxWidth:720,textAlign:"left"}}>
+      <span style={{flex:1,minWidth:200,fontSize:14,color:"#0a6554"}}>Your work on <strong>{workTitle}</strong> is saved.</span>
+      <button className="btn-revise" onClick={()=>setPage(customPrompt.trim()||customFiles.length ? "custom" : docType ? "form" : "intake")}>Continue</button>
+      <button onClick={startOver} style={{background:"none",border:"none",color:"#7a8a9a",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>Discard</button>
+    </div>
+  );
 
   const loadEmailJS = () => new Promise((res, rej) => {
     if (window.emailjs) { res(); return; }
@@ -1415,13 +1441,13 @@ ${WS_PARSE_GUIDE}`;
         </div>
         <div className="header-divider" />
         <div className="header-text">
-          <div className="header-title">Document Generator</div>
+          <div className="header-title">SG Portal</div>
           <div className="header-sub">Solution Group · Internal Tool</div>
         </div>
         <div className="header-right">
           <span>solutionmgt.com</span>
           <button className="help-btn" onClick={()=>setShowHelp(true)}>? Need help</button>
-          <button className="help-btn" onClick={signOut} title="Sign out of the Document Generator">Sign out</button>
+          <button className="help-btn" onClick={signOut} title="Sign out of the SG Portal">Sign out</button>
         </div>
       </header>
 
@@ -1494,30 +1520,48 @@ ${WS_PARSE_GUIDE}`;
         </div>
       )}
 
-      {/* ── HOME ── */}
+      {/* ── HOME: the portal ── */}
       {page==="home" && (
         <div className="home">
-          <h1>Generate<br />a Document</h1>
-          <p>Build a branded assessment or proposal in minutes. Upload your files and let Claude do the writing.</p>
-          {hasWork && (
-            <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",background:"#e1f5ee",border:"1px solid #1D9E75",borderRadius:8,padding:"12px 16px",margin:"0 auto 22px",maxWidth:720,textAlign:"left"}}>
-              <span style={{flex:1,minWidth:200,fontSize:14,color:"#0a6554"}}>Your work on <strong>{workTitle}</strong> is saved.</span>
-              <button className="btn-revise" onClick={()=>setPage(customPrompt.trim()||customFiles.length ? "custom" : docType ? "form" : "intake")}>Continue</button>
-              <button onClick={startOver} style={{background:"none",border:"none",color:"#7a8a9a",cursor:"pointer",fontSize:13,textDecoration:"underline",fontFamily:"inherit"}}>Discard</button>
-            </div>
-          )}
-          <div className="doc-cards">
-            {DOC_TYPES.map(dt=>(
-              <div key={dt.id} className="doc-card" onClick={()=>startIntake(dt.id)}>
-                <div className="icon">{dt.icon}</div>
-                <h3>{dt.title}</h3>
-                <p>{dt.desc}</p>
-                <span className={`badge ${dt.badgeClass}`}>{dt.badge}</span>
-              </div>
+          <h1>SG Portal</h1>
+          <p>Build proposals, request custom files and log new sales leads in HubSpot.</p>
+          {savedBanner}
+          <div className="doc-cards portal-cards">
+            {PORTAL.map(p=>(
+              <button key={p.id} className="doc-card" onClick={()=>setPage(p.id)}>
+                <div className="icon">{p.icon}</div>
+                <h3>{p.title}</h3>
+                <p>{p.desc}</p>
+              </button>
             ))}
           </div>
         </div>
       )}
+
+      {/* ── GENERATE A PROPOSAL / CUSTOM FILE CREATION ── */}
+      {(page==="generate" || page==="files") && (
+        <div className="home">
+          <button className="form-back" style={{display:"block",margin:"0 auto 18px"}} onClick={()=>setPage("home")}>← Back to the portal</button>
+          <h1>{page==="generate" ? "Generate a proposal" : "Custom file creation"}</h1>
+          <p>{page==="generate"
+            ? "Build a branded assessment or proposal in minutes. Upload your files and let Claude do the writing."
+            : "Describe a freeform document for Claude to write now, or send Chase a brief for files that need photos and design work."}</p>
+          {page==="generate" && savedBanner}
+          <div className={"doc-cards" + (page==="files" ? " portal-cards" : "")}>
+            {DOC_TYPES.filter(dt => (page==="files") === (dt.id==="custom" || dt.id==="design")).map(dt=>(
+              <button key={dt.id} className="doc-card" onClick={()=>startIntake(dt.id)}>
+                <div className="icon">{dt.icon}</div>
+                <h3>{dt.title}</h3>
+                <p>{dt.desc}</p>
+                <span className={`badge ${dt.badgeClass}`}>{dt.badge}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── SALES LEAD ── */}
+      {page==="lead" && <LeadForm onBack={()=>setPage("home")} />}
 
       {/* ── INTAKE ── */}
       {page==="intake" && (
@@ -1583,7 +1627,7 @@ ${WS_PARSE_GUIDE}`;
           <div style={{textAlign:"center",marginTop:12,fontSize:12,color:"#b0bbc8"}}>
             Claude will read your files, extract the relevant details, and open the proposal form pre-filled
           </div>
-          <button className="form-back" style={{margin:"20px auto 0",display:"block"}} onClick={()=>setPage("home")}>← Back</button>
+          <button className="form-back" style={{margin:"20px auto 0",display:"block"}} onClick={()=>setPage("generate")}>← Back</button>
         </div>
       )}
 
@@ -1684,7 +1728,7 @@ ${WS_PARSE_GUIDE}`;
       {/* ── CUSTOM REQUEST (sent to Chase) ── */}
       {page==="design" && (
         <DesignRequest
-          onBack={()=>setPage("home")}
+          onBack={()=>setPage("files")}
           defaultName={formData.generatedBy || (()=>{ try { return store.get("sg_generated_by") || ""; } catch(e) { return ""; } })()}
           email={{ service: EMAILJS_SERVICE, template: EMAILJS_DESIGN_TEMPLATE, load: loadEmailJS }}
         />
@@ -1693,7 +1737,7 @@ ${WS_PARSE_GUIDE}`;
       {/* ── CUSTOM ── */}
       {page==="custom" && (
         <div className="custom-page">
-          <button className="form-back" onClick={()=>setPage("home")}>← Back</button>
+          <button className="form-back" onClick={()=>setPage("files")}>← Back</button>
           <div className="custom-title">Custom Document</div>
           <div className="custom-sub">
             Describe exactly what you need — no predefined structure, no required fields.

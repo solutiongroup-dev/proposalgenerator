@@ -82,7 +82,7 @@ export default function LoginGate({ children }) {
           <div style={{ background: "white", borderRadius: 6, padding: "5px 10px" }}>
             <img src={SG_LOGO} alt="Solution Group" style={{ height: 32, display: "block" }} />
           </div>
-          <div style={{ color: "white", fontWeight: 600, fontSize: 15 }}>Document Generator</div>
+          <div style={{ color: "white", fontWeight: 600, fontSize: 15 }}>SG Portal</div>
         </div>
         <div style={{ padding: "26px 28px 28px" }}>
           <h1 style={{ fontSize: 20, color: BLUE, marginBottom: 6 }}>{expired ? "Please sign in again" : "Sign in"}</h1>

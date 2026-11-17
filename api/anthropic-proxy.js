@@ -29,6 +29,13 @@ module.exports = async function (req, res) {
       proxyReq.write(body);
       proxyReq.end();
     });
+    // Claude refusing the server's key is a setup problem, not the user's sign-in: never pass a
+    // 401/403 through, or the page sends the person to the sign-in screen
+    if (result.status === 401 || result.status === 403) {
+      console.error('Claude rejected the API key:', result.status, result.body.slice(0, 200));
+      res.status(502).json({ error: { message: "Claude rejected the server's API key. Tell Chase (ANTHROPIC_API_KEY in Vercel)." } });
+      return;
+    }
     res.status(result.status).send(result.body);
   } catch (err) {
     res.status(502).json({ error: { message: `Proxy error: ${err.message}` } });

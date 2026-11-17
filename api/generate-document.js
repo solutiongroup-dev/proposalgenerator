@@ -337,6 +337,11 @@ function tableSection(num, t) {
 function buildProposal(cfg) {
   const pricing = cfg.pricing || {};
   const lineItems = pricing.line_items || [];
+  const oneTime = pricing.pricing_basis === 'one_time';
+  // A missing total is the sum of the priced lines (never "To be confirmed" next to real amounts)
+  const lineSum = lineItems.reduce((a, li) => a + (isFinite(toNum(li.monthly)) && li.monthly !== null && li.monthly !== '' ? toNum(li.monthly) : 0), 0);
+  if ((pricing.monthly_total == null || pricing.monthly_total === '') && lineSum > 0) pricing.monthly_total = lineSum;
+  if (oneTime) pricing.annual_total = null;
 
   const pricingHeaderRow = new TableRow({
     tableHeader: true,
@@ -386,7 +391,13 @@ function buildProposal(cfg) {
       blueBar(`${sn()}. Service Confirmation`), ...spacer(1),
       body(cfg.sections?.service_confirmation || cfg.service_confirmation_text || ''), ...spacer(2),
     ],
-    commercial_summary: () => [
+    commercial_summary: () => oneTime ? [
+      ...tableSection(sn(), { title: 'Commercial Summary', columns: ['Item', 'Amount'], align: ['left', 'right'],
+        rows: lineItems.map(li => [li.description || '', fmt(li.monthly, cfg) || 'To be confirmed']),
+        total_row: ['Total Investment', fmt(pricing.monthly_total, cfg) || 'To be confirmed'] }).slice(0, -2),
+      ...(pricing.pricing_notes || []).map(n => body(n, { italic: true })),
+      ...spacer(2),
+    ] : [
       blueBar(`${sn()}. Commercial Summary`), ...spacer(1),
       new Table({ width: { size: 9360, type: WidthType.DXA }, columnWidths: [5400, 1980, 1980], rows: [pricingHeaderRow, ...pricingLineRows, totalRow] }),
       ...spacer(1),
@@ -838,7 +849,8 @@ Return ONLY valid JSON (no markdown, no preamble) matching this structure:
     "monthly_total": number,
     "annual_total": number,
     "line_items": [{ "description": "string", "monthly": number }],
-    "include_opticlear": true or false
+    "include_opticlear": true or false,
+    "pricing_basis": "monthly" if the prices are recurring monthly fees, or "one_time" if the source only has one-time amounts (equipment purchase, installation, a project total). Never present one-time amounts as monthly fees; for one_time put each one-time amount in "monthly" and the total in "monthly_total" and they are shown as one-time.
   },
   "timeline": "string or null — timeline description if provided",
   "include_signature": true or false,
@@ -1012,7 +1024,7 @@ function applySectionChoices(cfg, formData) {
 
 // ── Revision prompt: edit the existing document as the user asks ─────────────
 const REVISABLE = {
-  proposal:   'sections.introduction, sections.service_confirmation, pricing (monthly_total, annual_total, line_items[{description, monthly}]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, table_sections, section_order. Built-in section keys: introduction, service_confirmation, commercial_summary, timeline, assumptions, next_steps.',
+  proposal:   'sections.introduction, sections.service_confirmation, pricing (monthly_total, annual_total, line_items[{description, monthly}], pricing_basis "monthly" or "one_time"), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, table_sections, section_order. Built-in section keys: introduction, service_confirmation, commercial_summary, timeline, assumptions, next_steps.',
   project:    'sections.introduction, sections.project_confirmation, sections.engineering_scope, pricing (total, categories[{name, amount}], contingency_notes[], pricing_notes[]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, table_sections, section_order. Built-in section keys: introduction, project_confirmation, engineering_scope, commercial_summary, timeline, assumptions, next_steps.',
   assessment: 'executive_summary, site_overview, regulatory, systems[{name, current_state, findings[], risks[], recommendations[]}], staffing_model.',
   watersolve: 'salutation, opening, executive_summary, bid_items[], includes_products[], includes_equipment[], includes_labor[], schedule_summary, exclusions[], quote_assumptions[], project_description_line, and line_items[{qty, uom, item, description, unitPrice, group}] (the priced table; amounts are qty x unitPrice and are calculated for you). To split the price table into options or phases, give every line item a group name (e.g. "Option A: Dredging only") in the order they should appear; each group gets its own subtotal. Set options_are_alternatives to true when the customer picks one group instead of buying all of them (no grand total is shown then). A line item may appear in more than one group. Keep bid_items item_index matching the line item order.',
@@ -1250,6 +1262,7 @@ Return ONLY the document content — no preamble, no explanation.`
     // JSON, not a binary download: the client needs the config to make later revisions,
     // and a large config does not fit in a response header.
     const warnings = docType === 'watersolve' ? [] : pricingWarnings(cfg, docType);
+    if (docType === 'proposal' && cfg.pricing?.pricing_basis === 'one_time') warnings.unshift('The pricing in your files looks one-time (equipment, installation or a project total), so it is shown as one-time amounts, not monthly fees. If this is a capital project, use Project Proposal instead.');
     const sources = [fileText, JSON.stringify(formData || {}), isRevision ? JSON.stringify(previousConfig) + ' ' + revisionInstructions + ' ' + (revisionHistory || []).join(' ') : ''].join(' ');
     const unsourced = hasBinary ? [] : unsourcedAmounts(cfg, sources, docType);
     if (unsourced.length) warnings.push(`These prices are not in your form, files or earlier versions, so Claude may have estimated them: ${unsourced.join('; ')}. Confirm or replace them.`);

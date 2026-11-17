@@ -1348,7 +1348,9 @@ ${WS_PARSE_GUIDE}`;
         if (t > 0) { formData.dealAmount = fmtMoney(t); setField("dealAmount", formData.dealAmount); }
       } else if (docType === "proposal" && (Number(cfg?.pricing?.annual_total) > 0 || Number(cfg?.pricing?.monthly_total) > 0)) {
         // Recurring deals go to HubSpot at their annual value
-        const annualValue = Number(cfg.pricing.annual_total) > 0 ? Number(cfg.pricing.annual_total) : Number(cfg.pricing.monthly_total) * 12;
+        // One-time pricing is the deal value as is; monthly fees go in at their annual value
+        const annualValue = cfg.pricing.pricing_basis === "one_time" ? Number(cfg.pricing.monthly_total)
+          : Number(cfg.pricing.annual_total) > 0 ? Number(cfg.pricing.annual_total) : Number(cfg.pricing.monthly_total) * 12;
         formData.dealAmount = fmtMoney(annualValue); setField("dealAmount", formData.dealAmount);
       } else if (docType === "project" && isRevision && Number(cfg?.pricing?.total) > 0) {
         formData.dealAmount = fmtMoney(cfg.pricing.total); setField("dealAmount", formData.dealAmount);

@@ -7,18 +7,10 @@
 
 const { issueSignedToken, presignUrl } = require('@vercel/blob');
 const { blobCredentials, REQUEST_PATH_RE } = require('./_blob');
-const { isSignedIn } = require('./_auth');
 
 module.exports = async function (req, res) {
   const pathname = String((req.query && req.query.p) || '');
   if (!REQUEST_PATH_RE.test(pathname)) { res.status(400).send('Invalid file link.'); return; }
-  if (!isSignedIn(req)) {
-    // Send them to sign in, then straight back to this file
-    res.setHeader('Cache-Control', 'no-store');
-    res.writeHead(302, { Location: '/?next=' + encodeURIComponent(req.url) });
-    res.end();
-    return;
-  }
   const creds = blobCredentials(req);
   if (!creds) { res.status(500).send('File storage not set up.'); return; }
   try {

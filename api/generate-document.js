@@ -13,7 +13,6 @@
  */
 
 const https  = require('https');
-const { requireAuth } = require('./_auth');
 const path   = require('path');
 const fs     = require('fs');
 const {
@@ -977,7 +976,10 @@ Return ONLY the complete updated config as valid JSON, with the same structure. 
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function (req, res) {
-  if (!requireAuth(req, res)) return;
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
 
   if (!API_KEY) {
     res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured.' }); return;

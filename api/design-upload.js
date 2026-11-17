@@ -12,7 +12,6 @@
 const { handleUploadPresigned } = require('@vercel/blob/client');
 const { issueSignedToken } = require('@vercel/blob');
 const { blobCredentials, REQUEST_PATH_RE } = require('./_blob');
-const { requireAuth } = require('./_auth');
 
 const MAX_BYTES = 500 * 1024 * 1024;
 const TYPES = [
@@ -26,7 +25,6 @@ const TYPES = [
 
 module.exports = async function (req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'POST only' }); return; }
-  if (!requireAuth(req, res)) return;
   const creds = blobCredentials(req);
   if (!creds) {
     res.status(500).json({ error: 'File storage not set up (no Blob store connected).' });

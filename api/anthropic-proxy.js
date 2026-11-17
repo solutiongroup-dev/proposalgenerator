@@ -1,8 +1,11 @@
 const https = require("https");
-const { requireAuth } = require("./_auth");
 
 module.exports = async function (req, res) {
-  if (!requireAuth(req, res)) return;
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") { res.status(204).end(); return; }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) { res.status(500).json({ error: { message: "ANTHROPIC_API_KEY not configured." } }); return; }

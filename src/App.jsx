@@ -876,6 +876,7 @@ export default function App() {
     setParsed(false); setParseErr(""); setGenErr(""); setGenerated(false); setRevisions("");
     setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
     setCustomPrompt(""); setCustomFiles([]); setCustomErr(""); setRestoredAt(null);
+    setHubspotStatus(null); setHsMatches(0); setHsDealCount(0);
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
       return { closeDate: threeMonths.toISOString().split("T")[0], generatedBy: prev.generatedBy || store.get("sg_generated_by") || "", optionalSections: [] };
@@ -939,7 +940,7 @@ export default function App() {
   const selectDoc = (type) => {
     setDocType(type); setErrors({});
     setParsed(false); setParseErr(""); setGenErr("");
-    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
+    setGenerated(false); setRevisions(""); setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null); setHubspotStatus(null);
     setFormData(prev => {
       const threeMonths = new Date(); threeMonths.setMonth(threeMonths.getMonth() + 3);
       const defaultPipeline = type === "watersolve" ? "WaterSolve" : type === "project" ? "Project" : type === "proposal" ? "Recurring" : "";

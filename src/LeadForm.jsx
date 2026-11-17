@@ -203,8 +203,8 @@ export default function LeadForm({ onBack }) {
             )}
           </div>
           <div className="field">
-            <label htmlFor="l-val">Estimated value</label>
-            <input id="l-val" inputMode="decimal" value={f.estimatedValue} onChange={e => set("estimatedValue", e.target.value)} placeholder="$250,000 or 250k" />
+            <label htmlFor="l-val">Estimated value{f.pipeline === "Recurring" ? " (annual)" : ""}</label>
+            <input id="l-val" inputMode="decimal" value={f.estimatedValue} onChange={e => set("estimatedValue", e.target.value)} placeholder={f.pipeline === "Recurring" ? "Yearly value, e.g. 220k" : "$250,000 or 250k"} />
           </div>
           <div className="field full">
             <label htmlFor="l-next">Next steps</label>

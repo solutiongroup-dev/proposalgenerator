@@ -564,7 +564,7 @@ ${JSON.stringify([...allKeys, "sourceSummary"])}
 FIELD MAPPING GUIDANCE:
 - "sgContactName": look for SG rep or "Prepared By". Default to "Ted Winkelman" if not found.
 - "sgContactEmail": default to "twinkelman@solutionmgt.com" if not found.
-- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48".
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
 - "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
 - "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
 - "proposalDate": look for "Proposal Date" or document date. Format YYYY-MM-DD.
@@ -1096,7 +1096,7 @@ Extract values for these keys: ${JSON.stringify([...allKeys, "suggestedDocType"]
 FIELD MAPPING:
 - "sgContactName": default "Ted Winkelman" if not found
 - "sgContactEmail": default "twinkelman@solutionmgt.com" if not found
-- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48".
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
 - "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
 - "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
 - "proposalDate": the proposal or document date, YYYY-MM-DD
@@ -1339,6 +1339,10 @@ ${WS_PARSE_GUIDE}`;
           ? Math.max(...groups.map(g => wsItemsTotal(items.filter(li => (li.group || "") === g))))
           : wsItemsTotal(items);
         if (t > 0) { formData.dealAmount = fmtMoney(t); setField("dealAmount", formData.dealAmount); }
+      } else if (docType === "proposal" && (Number(cfg?.pricing?.annual_total) > 0 || Number(cfg?.pricing?.monthly_total) > 0)) {
+        // Recurring deals go to HubSpot at their annual value
+        const annualValue = Number(cfg.pricing.annual_total) > 0 ? Number(cfg.pricing.annual_total) : Number(cfg.pricing.monthly_total) * 12;
+        formData.dealAmount = fmtMoney(annualValue); setField("dealAmount", formData.dealAmount);
       } else if (docType === "project" && isRevision && Number(cfg?.pricing?.total) > 0) {
         formData.dealAmount = fmtMoney(cfg.pricing.total); setField("dealAmount", formData.dealAmount);
       }
@@ -1472,7 +1476,7 @@ ${WS_PARSE_GUIDE}`;
     return (
       <div key={f.key} className="field" data-field={f.key} style={f.full?{gridColumn:"1 / -1"}:{}}>
         <label>
-          {f.label}
+          {f.key === "dealAmount" && docType === "proposal" ? "Deal Amount (annual)" : f.label}
           {f.required ? <span className="req"> *</span> : <span className="opt"> optional</span>}
           {isAI && <span className="ai-badge">auto-filled</span>}
         </label>

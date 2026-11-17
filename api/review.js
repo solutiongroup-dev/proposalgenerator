@@ -122,6 +122,7 @@ module.exports = async function (req, res) {
     if (!lines.length && !context && !b.noUpdates) { res.status(400).json({ error: 'Nothing to save. Make a change, add context, or choose No updates.' }); return; }
 
     if (Object.keys(patch).length) await hubspotRequest('PATCH', `/crm/v3/objects/deals/${dealId}`, { properties: patch });
+    let contactNote = '';
 
     // Customer email: fix it on the deal's contact, or add a contact if the deal has none
     if (changed('customerEmail') && changes.customerEmail) {
@@ -133,8 +134,18 @@ module.exports = async function (req, res) {
           throw e;
         });
       } else {
-        const c = await findOrCreateContact({ email, ownerId });
-        if (c) await link('deals', dealId, 'contacts', c.id);
+        const name = String(b.customerName || '').trim().slice(0, 120);
+        const c = await findOrCreateContact({ email, contactName: name, ownerId });
+        if (c) {
+          await link('deals', dealId, 'contacts', c.id);
+          // Emails are unique in HubSpot: an existing contact with this email is linked, not duplicated
+          if (c.existing) {
+            const cp = (await hubspotRequest('GET', `/crm/v3/objects/contacts/${c.id}?properties=firstname,lastname`).catch(() => ({}))).properties || {};
+            const who = [cp.firstname, cp.lastname].filter(Boolean).join(' ') || 'a contact with no name';
+            contactNote = `Linked existing HubSpot contact ${who} (${email})`;
+          } else contactNote = `Added new contact ${name || '(no name)'} (${email})`;
+          lines.push(contactNote);
+        }
       }
     }
 
@@ -149,7 +160,7 @@ module.exports = async function (req, res) {
     });
 
     console.log(`Deal review saved: ${dealId} by ${owner.name}${lines.length ? ` (${lines.length} changes)` : ' (no updates)'}`);
-    res.status(200).json({ ok: true, changes: lines });
+    res.status(200).json({ ok: true, changes: lines, contactNote });
   } catch (err) {
     console.error('Review error:', err.message);
     res.status(err.status && err.status < 500 ? err.status : 500).json({ error: err.status === 403 ? 'HubSpot refused the update (the website key is missing a permission).' : err.message });

@@ -72,6 +72,8 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
   const original = valuesOf(deal);
   const [v, setV] = useState(original);
   const [context, setContext] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [savedNote, setSavedNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
@@ -84,11 +86,11 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
     try {
       const changes = Object.fromEntries(changed.map(k => [k, k === "amount" || k === "contractDays" || k === "probability" ? (v[k] === "" ? "" : Number(v[k])) : v[k]]));
       const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner, t: token, dealId: deal.id, noUpdates, context, changes, original }) });
+        body: JSON.stringify({ owner, t: token, dealId: deal.id, noUpdates, context, changes, original, customerName }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `Could not save (${r.status}).`);
       const label = noUpdates && !changed.length ? "No updates" : (d.changes?.length ? `${d.changes.length} update${d.changes.length === 1 ? "" : "s"}` : "Context added");
-      setContext("");
+      setContext(""); setSavedNote(d.contactNote || "");
       onDone(deal.id, label, v);
     } catch (e) {
       setMsg({ bad: true, text: e.message === "Failed to fetch" ? "Could not reach the server. Check your connection and try again." : e.message });
@@ -104,11 +106,17 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
       {done ? <span className="rv-tag ok">{done}</span> : (deal.reasons.length > 0 && <span className="rv-tag warn">{deal.reasons.length} to check</span>)}
     </button>
   );
-  if (!open) return <div className="rv-card closed" id={`deal-${deal.id}`}>{row}</div>;
+  if (!open) return (
+    <div className="rv-card closed" id={`deal-${deal.id}`}>
+      {row}
+      {savedNote && <div style={{ fontSize: 12, color: "#0a6554", margin: "6px 0 0 40px" }}>✓ {savedNote}</div>}
+    </div>
+  );
 
   return (
     <div className="rv-card open" id={`deal-${deal.id}`}>
       {row}
+      {savedNote && <div className="rv-msg good">{savedNote}</div>}
       {done && <div className="rv-msg good">Already reviewed ({done}). Saving again adds another review note.</div>}
       <>
         {deal.reasons.length > 0 && <div className="rv-chips">{deal.reasons.map(r => <span key={r} className="rv-chip">{r}</span>)}</div>}
@@ -121,6 +129,10 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
         <div className="rv-grid">
           <div className="rv-f wide"><label>Customer email{deal.customer?.name ? ` (${deal.customer.name})` : ""}</label>
             <input type="email" inputMode="email" autoCapitalize="none" className={cls("customerEmail")} value={v.customerEmail} onChange={e => set("customerEmail", e.target.value)} placeholder="name@customer.com" /></div>
+          {!deal.customer && changed.includes("customerEmail") && (
+            <div className="rv-f"><label>Customer name (if new)</label>
+              <input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="First Last" /></div>
+          )}
           <div className="rv-f"><label>Close date</label>
             <input type="date" className={cls("closeDate")} value={v.closeDate} onChange={e => set("closeDate", e.target.value)} /></div>
           <div className="rv-f"><label>Deal amount ($)</label>

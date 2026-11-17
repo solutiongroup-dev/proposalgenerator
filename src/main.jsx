@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import LoginGate from './Login.jsx'
 
 // If the app ever crashes while rendering, show a way back instead of a blank page.
 // Work in progress is autosaved (src/draft.js), so reloading restores it.
@@ -28,7 +29,9 @@ class CrashGuard extends React.Component {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <CrashGuard>
-      <App />
+      <LoginGate>
+        <App />
+      </LoginGate>
     </CrashGuard>
   </React.StrictMode>,
 )

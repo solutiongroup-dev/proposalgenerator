@@ -11,6 +11,7 @@ const SG_DARK_GRAY = "#333333";
 const SG_LIGHT_GRAY = "#F2F2F2";
 const SG_BORDER_GRAY = "#CCCCCC";
 import SG_LOGO from "./sg_logo.png";
+import { signOut } from "./Login.jsx";
 
 
 const styles = `
@@ -669,6 +670,7 @@ function downloadText(content, filename) {
 
 // Plain-language message for a failed server call (people saw "Server error 504" before)
 function friendlyError(status, detail) {
+  if (status === 401) return "Your sign-in ran out. Sign in again; your work is saved.";
   if (status === 504) return "Claude took too long to finish. Please try again. If it keeps happening, use fewer or smaller files, or shorten the pasted text.";
   if (status === 413) return "The files are too large to send together. Try fewer files, or split large PDFs.";
   if (status === 429 || status === 529) return "Claude is busy right now. Wait a minute and try again.";
@@ -1419,6 +1421,7 @@ ${WS_PARSE_GUIDE}`;
         <div className="header-right">
           <span>solutionmgt.com</span>
           <button className="help-btn" onClick={()=>setShowHelp(true)}>? Need help</button>
+          <button className="help-btn" onClick={signOut} title="Sign out of the Document Generator">Sign out</button>
         </div>
       </header>
 

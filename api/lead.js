@@ -64,13 +64,45 @@ async function searchOne(objectType, propertyName, value, properties) {
   return r.results?.[0] || null;
 }
 
-async function findOrCreateCompany({ companyName, location, domain, ownerId }) {
-  if (domain) {
-    const byDomain = await searchOne('companies', 'domain', domain, ['name', 'domain']);
-    if (byDomain) return { id: byDomain.id, name: byDomain.properties?.name || companyName, existing: true };
+// Companies matching what's typed, plus every company on the contact's email domain.
+// Several sites can share one domain (Agropur Lake Norden, Agropur Hull…), so the
+// person picks the right one rather than the app guessing.
+async function searchCompanies(q, domain) {
+  const props = ['name', 'domain', 'city', 'state'];
+  const found = new Map();
+  const add = (results, sameDomain) => (results || []).forEach(c => {
+    const p = c.properties || {};
+    const prev = found.get(c.id);
+    found.set(c.id, { id: c.id, name: p.name || '(no name)', domain: p.domain || '', city: p.city || '', state: p.state || '', sameDomain: sameDomain || prev?.sameDomain || false });
+  });
+  const jobs = [];
+  if (q.length >= 2) {
+    jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', { query: q, properties: props, limit: 20 }).then(r => add(r.results)));
+    const word = q.split(/\s+/).find(w => w.length >= 3);
+    if (word) jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', {
+      filterGroups: [{ filters: [{ propertyName: 'name', operator: 'CONTAINS_TOKEN', value: `*${word.replace(/[^\w-]/g, '')}*` }] }],
+      properties: props, limit: 20,
+    }).then(r => add(r.results)).catch(() => {}));
   }
-  const byName = await searchOne('companies', 'name', companyName, ['name', 'domain']);
-  if (byName) return { id: byName.id, name: byName.properties?.name || companyName, existing: true };
+  if (domain) jobs.push(hubspotRequest('POST', '/crm/v3/objects/companies/search', {
+    filterGroups: [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: domain }] }],
+    properties: props, limit: 50,
+  }).then(r => add(r.results, true)));
+  await Promise.all(jobs);
+  const ql = q.toLowerCase();
+  return [...found.values()]
+    .sort((a, b) => (b.name.toLowerCase().startsWith(ql) - a.name.toLowerCase().startsWith(ql)) || a.name.localeCompare(b.name))
+    .slice(0, 25);
+}
+
+async function useOrCreateCompany({ companyId, companyName, location, domain, ownerId }) {
+  if (companyId) {
+    const c = await hubspotRequest('GET', `/crm/v3/objects/companies/${companyId}?properties=name`);
+    return { id: c.id, name: c.properties?.name || companyName, existing: true };
+  }
+  // Safety net: a company with exactly this name already exists, so use it instead of a duplicate
+  const same = await searchOne('companies', 'name', companyName, ['name']);
+  if (same) return { id: same.id, name: same.properties?.name || companyName, existing: true };
   const created = await hubspotRequest('POST', '/crm/v3/objects/companies', {
     properties: { name: companyName, ...splitLocation(location), ...(domain ? { domain } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}) },
   });
@@ -140,6 +172,17 @@ module.exports = async function (req, res) {
   res.setHeader('Cache-Control', 'no-store');
   if (!process.env.HUBSPOT_API_KEY) { res.status(500).json({ error: 'HUBSPOT_API_KEY not configured.' }); return; }
 
+  if (req.method === 'GET' && req.query && (req.query.company !== undefined || req.query.domain)) {
+    const q = String(req.query.company || '').trim().slice(0, 100);
+    const d = String(req.query.domain || '').trim().toLowerCase();
+    const domain = /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d) && !FREE_MAIL.test(d) ? d : '';
+    try { res.status(200).json({ companies: await searchCompanies(q, domain) }); }
+    catch (err) {
+      console.error('Company search failed:', err.message);
+      res.status(200).json({ companies: [], searchError: err.status === 403 || err.category === 'MISSING_SCOPES' ? scopeHint(err, 'Could not search HubSpot companies') : 'Could not search HubSpot companies' });
+    }
+    return;
+  }
   if (req.method === 'GET') {
     try { res.status(200).json({ owners: await listOwners() }); }
     catch (err) {
@@ -156,6 +199,7 @@ module.exports = async function (req, res) {
   const phone = clean(b.phone), email = clean(b.email).toLowerCase(), nextSteps = clean(b.nextSteps);
   const ownerId = clean(b.ownerId), ownerName = clean(b.ownerName), pipelineKey = clean(b.pipeline);
   const amount = parseMoney(b.estimatedValue);
+  const companyId = /^\d{1,20}$/.test(clean(b.companyId)) ? clean(b.companyId) : '';
 
   const problems = [];
   if (!companyName) problems.push('Company name is required.');
@@ -168,7 +212,9 @@ module.exports = async function (req, res) {
   const warnings = [];
   try {
     const stage = await prequalStage(pipelineKey);
-    const dealname = location ? `${companyName} - ${location}` : companyName;
+    // Skip the location in the deal name when the company name already says which site it is
+    const city = (splitLocation(location).city || '').toLowerCase();
+    const dealname = location && !(city && companyName.toLowerCase().includes(city)) ? `${companyName} - ${location}` : companyName;
 
     // A double-tap or a retry after a slow network must not create a second deal
     const recent = await hubspotRequest('POST', '/crm/v3/objects/deals/search', {
@@ -217,7 +263,7 @@ module.exports = async function (req, res) {
     const domain = emailDomain && !FREE_MAIL.test(emailDomain) ? emailDomain : '';
     let company = null, contact = null;
     try {
-      company = await findOrCreateCompany({ companyName, location, domain, ownerId });
+      company = await useOrCreateCompany({ companyId, companyName, location, domain, ownerId });
       await link('deals', deal.id, 'companies', company.id);
     } catch (err) { console.warn('Company step failed:', err.message); warnings.push(scopeHint(err, 'The company could not be added or linked')); }
     try {

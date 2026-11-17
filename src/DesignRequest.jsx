@@ -9,13 +9,12 @@ import { loadDraft, saveDraft, clearDraft, savedLabel, store } from "./draft.js"
 
 const BLUE = "#2B579A";
 
-const DOC_KINDS = ["Proposal (custom layout)", "Capabilities brochure", "Case study", "Report", "Presentation / slide deck",
-  "Flyer / one-pager", "Letter or memo", "Signage or poster", "Other"];
-const BRANDS = ["Solution Group", "WaterSolve", "Co-branded (SG + client)", "Client's brand", "Unbranded"];
-const FORMATS = ["Word (.docx)", "PDF", "PowerPoint (.pptx)", "Web page", "Not sure. Recommend one"];
-const STYLES = ["Clean corporate", "Bold marketing", "Technical / engineering", "Photo-led", "Match the reference files"];
-const PRIORITIES = ["Normal", "High", "Urgent"];
-const FILE_ROLES = ["Photo to use in the document", "Source content (pull text/data from it)", "Style reference (look and feel)", "Logo or brand asset", "Other"];
+const DOC_KINDS = ["Slide deck", "One-pager / flyer", "Brochure", "Proposal or report (designed)", "Case study", "Other"];
+const FORMAT_FOR = { "Slide deck": "PowerPoint", "One-pager / flyer": "PDF", "Brochure": "PDF", "Proposal or report (designed)": "Word", "Case study": "PDF", "Other": "Not sure" };
+const FORMATS = ["PowerPoint", "PDF", "Word", "Not sure"];
+const BRANDS = ["Solution Group", "WaterSolve", "Solution Group + WaterSolve", "Client's brand"];
+const FILE_ROLES = ["Source content (pull text/data from it)", "Photo to use", "Logo", "Example of the look we want", "Other"];
+const DEFAULTS = { brand: "Solution Group", format: "", kind: "" };
 
 const MAX_FILE_MB = 500;
 
@@ -33,31 +32,32 @@ function newRequestId() {
 // The brief Chase pastes into Claude / Claude Design. Written so Claude can
 // produce the finished document with no follow-up questions.
 export function buildBrief(id, f, files) {
-  const line = (label, v) => v && String(v).trim() ? `- **${label}:** ${String(v).trim()}\n` : "";
-  const block = (title, v) => v && String(v).trim() ? `\n## ${title}\n${String(v).trim()}\n` : "";
+  const t = v => String(v || "").trim();
+  const deck = /deck|slide/i.test(f.kind) || f.format === "PowerPoint";
   const fileList = files.length
-    ? files.map((x, i) => `${i + 1}. **${x.name}** (${mb(x.size)}): ${x.role}${x.note ? `. ${x.note}` : ""}\n   ${x.url || "(not uploaded)"}`).join("\n")
+    ? files.map((x, i) => `${i + 1}. ${x.name} (${mb(x.size)}): ${x.role}${x.note ? `. ${x.note}` : ""}\n   ${x.url || "(not uploaded)"}`).join("\n")
     : "No files attached.";
-  return `# Custom Request ${id}: ${f.title}
+  return `# Custom Request ${id}: ${t(f.title)}
 
-## Instructions for Claude
-Produce a finished, ready-to-send ${f.format && !/not sure/i.test(f.format) ? f.format : "document (choose the best format for the purpose and say why)"} from this brief.
-- Follow the outline and include every fact, number and exact-text item given. Do not invent prices, names, dates, certifications or results; where something needed is missing, insert a clearly marked [PLACEHOLDER: what is needed].
-- Use the attached photos where the notes say. Download them from the links below. Give each photo a short caption unless told otherwise.
-- Brand: ${f.brand || "Solution Group"}. Design style: ${f.style || "Clean corporate"}.${f.colors ? ` Colors / brand notes: ${f.colors}.` : ""}
-- Audience: ${f.audience || "client decision makers"}. Write for them: plain, confident and specific.
-- Length target: ${f.length || "as long as the content needs, no padding"}.${/deck|presentation|pptx|slides?/i.test(`${f.kind} ${f.format}`) ? `
-- This is a slide deck: build it as real slides (in Claude, use a Slides deck), one idea per slide, short headlines, visuals and photos over paragraphs, speaker-ready. Export as PowerPoint.` : ""}
+## Build this
+Make a finished ${t(f.kind).toLowerCase() || "document"}${f.length ? ` (${t(f.length)})` : ""}, delivered as ${f.format && f.format !== "Not sure" ? f.format : "the best format for the purpose"}.
+- Audience: ${t(f.audience)}
+- Goal (what they should think or do after): ${t(f.purpose)}
+- Brand: ${f.brand || "Solution Group"}. Use the brand's logos and colors.${t(f.style) ? `\n- Look and feel: ${t(f.style)}` : ""}
+${deck ? "- Build it as a Slides deck in Claude: one idea per slide, short headlines, photos and visuals over paragraphs. Export as PowerPoint.\n" : "- Build it in Claude's Design tool as a designed, print-ready layout.\n"}- Use only the facts in this brief and the attached files. Never invent prices, names, dates, results or certifications; where something is missing, put [PLACEHOLDER: what is needed].
+- Use the attached photos and logos where the file notes say.
 
-## Document
-${line("Title", f.title)}${line("Type", f.kind)}${line("Prepared for (client / recipient)", f.client)}${line("Brand", f.brand)}${line("Output format", f.format)}${line("Length", f.length)}${line("Audience", f.audience)}${line("Purpose / what the reader should do", f.purpose)}${block("Outline (sections in order, and what goes in each)", f.outline)}${block("Key messages", f.messages)}${block("Content, facts and numbers", f.content)}${block("Exact text to include word for word", f.exactText)}
-## Visual design
-${line("Style", f.style)}${line("Colors / brand notes", f.colors)}${line("Charts, tables or diagrams needed", f.charts)}${line("Design references (links)", f.referenceLinks)}
-## Photos and files
+## Outline (in order)
+${t(f.outline)}
+${t(f.mustInclude) ? `\n## Must include, word for word, or avoid\n${t(f.mustInclude)}\n` : ""}
+## Files
 ${fileList}
-${block("Avoid", f.avoid)}
-## Request details
-${line("Request ID", id)}${line("Requested by", `${f.requesterName} <${f.requesterEmail}>`)}${line("Due", f.dueDate)}${line("Priority", f.priority)}${line("Send the finished document to", f.deliverTo || f.requesterEmail)}${line("Other notes", f.notes)}`;
+
+## Request
+- From: ${t(f.requesterName)} <${t(f.requesterEmail)}>
+- Needed by: ${t(f.dueDate)}
+- Send the finished file to: ${t(f.requesterEmail)}
+`;
 }
 
 function Field({ label, required, hint, children, full }) {
@@ -71,7 +71,7 @@ function Field({ label, required, hint, children, full }) {
 }
 
 export default function DesignRequest({ onBack, defaultName, email, seed, onSeedUsed }) {
-  const [f, setF] = useState(() => ({ requesterName: defaultName || "", priority: "Normal", brand: "Solution Group", style: "Clean corporate", format: "Word (.docx)", kind: "" }));
+  const [f, setF] = useState(() => ({ requesterName: defaultName || "", ...DEFAULTS }));
   const [files, setFiles] = useState([]);          // { file, role, note, progress, url }
   const [errors, setErrors] = useState({});
   const [err, setErr] = useState("");
@@ -87,14 +87,17 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
     let cancelled = false;
     loadDraft("customRequest").then(d => {
       if (cancelled) return;
-      if (d && (Object.values(d.f || {}).some(v => String(v || "").trim() && !["Normal", "Solution Group", "Clean corporate", "Word (.docx)", defaultName].includes(v)) || d.files?.length)) {
-        setF(p => ({ ...p, ...d.f }));
+      if (d && (Object.values(d.f || {}).some(v => String(v || "").trim() && !["Solution Group", defaultName].includes(v)) || d.files?.length)) {
+        // Older drafts kept the content in other fields: fold them into the outline
+        const old = d.f || {};
+        const outline = old.outline || [old.content, old.messages].filter(Boolean).join("\n\n");
+        setF(p => ({ ...p, ...old, outline }));
         setFiles((d.files || []).map(x => ({ ...x, progress: 0, url: "" })));
         setRestoredAt(d.savedAt);
       } else if (seed && (seed.text || seed.files?.length)) {
         // Handed over from Custom Document: start the brief from what they already wrote
         const deck = /\b(deck|slides?|presentation|powerpoint|pitch)\b/i.test(seed.text || "");
-        setF(p => ({ ...p, content: seed.text || "", ...(deck ? { kind: "Presentation / slide deck", format: "PowerPoint (.pptx)" } : {}) }));
+        setF(p => ({ ...p, outline: seed.text || "", ...(deck ? { kind: "Slide deck", format: "PowerPoint" } : {}) }));
         if (seed.files?.length) addFiles(seed.files);
       }
       if (seed && onSeedUsed) onSeedUsed();
@@ -110,11 +113,15 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
   const clearForm = () => {
     if (!window.confirm("Clear this request and start over?")) return;
     clearDraft("customRequest");
-    setF({ requesterName: defaultName || "", priority: "Normal", brand: "Solution Group", style: "Clean corporate", format: "Word (.docx)", kind: "" });
+    setF({ requesterName: defaultName || "", ...DEFAULTS });
     setFiles([]); setErrors({}); setErr(""); setRestoredAt(null);
   };
 
-  const set = (k, v) => { setF(p => ({ ...p, [k]: v })); setErrors(e => ({ ...e, [k]: false })); setErr(""); };
+  const set = (k, v) => {
+    // Picking a type suggests its usual format, unless a format was already chosen
+    setF(p => ({ ...p, [k]: v, ...(k === "kind" && !p.formatTouched ? { format: FORMAT_FOR[v] || "" } : {}), ...(k === "format" ? { formatTouched: true } : {}) }));
+    setErrors(e => ({ ...e, [k]: false })); setErr("");
+  };
   const inp = (k, props = {}) => <input className={errors[k] ? "err" : ""} value={f[k] || ""} onChange={e => set(k, e.target.value)} {...props} />;
   const area = (k, placeholder, rows = 4) => <textarea className={errors[k] ? "err" : ""} rows={rows} placeholder={placeholder} value={f[k] || ""} onChange={e => set(k, e.target.value)} />;
   const sel = (k, opts, blank) => (
@@ -135,15 +142,14 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
   };
   const setFile = (i, patch) => setFiles(p => p.map((x, j) => j === i ? { ...x, ...patch } : x));
 
-  const REQUIRED = ["requesterName", "requesterEmail", "title", "kind", "purpose", "dueDate"];
+  const REQUIRED = ["requesterName", "requesterEmail", "dueDate", "kind", "title", "audience", "purpose", "outline"];
 
   const submit = async () => {
     const errs = {};
     REQUIRED.forEach(k => { if (!String(f[k] || "").trim()) errs[k] = true; });
     if (f.requesterEmail && !/^\S+@\S+\.\S+$/.test(f.requesterEmail)) errs.requesterEmail = true;
-    if (!String(f.outline || "").trim() && !String(f.content || "").trim()) { errs.outline = true; errs.content = true; }
     setErrors(errs);
-    if (Object.keys(errs).length) { setErr("Fill in the highlighted fields. Give at least an outline or the content to include."); return; }
+    if (Object.keys(errs).length) { setErr("Fill in the highlighted fields."); return; }
     if (files.some(x => x.tooBig)) { setErr(`Remove files over ${MAX_FILE_MB} MB.`); return; }
     if (!email.template) { setErr("Custom requests aren't switched on yet: the email template ID is missing. Tell Chase."); return; }
 
@@ -185,11 +191,11 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
         request_id: id,
         doc_title: f.title,
         doc_kind: f.kind,
-        client_name: f.client || "Not specified",
+        client_name: f.audience || "Not specified",
         requester_name: f.requesterName,
         requester_email: f.requesterEmail,
         due_date: f.dueDate,
-        priority: f.priority,
+        priority: "Normal",
         file_count: String(uploaded.length),
         file_list: uploaded.length ? uploaded.map(u => `${u.name} (${mb(u.size)}): ${u.url}`).join("\n") : "None",
         brief_url: briefUrl,
@@ -215,7 +221,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
         <div className="custom-title">Request sent</div>
         <div className="custom-sub">
           Custom request <strong>{done.id}</strong> went to Chase with your files. The finished document will be
-          emailed to {f.deliverTo || f.requesterEmail}.
+          emailed to {f.requesterEmail}.
         </div>
         <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           <button className="btn-revise" onClick={() => navigator.clipboard?.writeText(done.brief)}>Copy brief</button>
@@ -238,35 +244,36 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
         </div>
       )}
       <div className="custom-sub">
-        For documents that need photos, custom layout or design work and don't fit the proposal templates.
-        This goes straight to Chase. Be specific: the more complete this is, the sooner the finished document comes back,
-        with no follow-up questions.
+        For decks, brochures and other designed pieces with photos or custom layout. Chase builds it with Claude
+        from this brief, so give the outline and the files it should use.
       </div>
 
       <div className="section">
         <div className="section-title">You</div>
         <div className="field-grid">
-          <Field label="Your name" required>{inp("requesterName", { placeholder: "Ted Winkelman" })}</Field>
+          <Field label="Your name" required>{inp("requesterName", { placeholder: "Daniel Wilcox" })}</Field>
           <Field label="Your email" required>{inp("requesterEmail", { type: "email", placeholder: "name@solutionmgt.com" })}</Field>
-          <Field label="Due date" required>{inp("dueDate", { type: "date" })}</Field>
-          <Field label="Priority">{sel("priority", PRIORITIES)}</Field>
-          <Field label="Send the finished document to" hint="Leave blank to send it to you. Separate several emails with commas." full>
-            {inp("deliverTo", { placeholder: "you, or the people who should receive it" })}
-          </Field>
+          <Field label="Needed by" required>{inp("dueDate", { type: "date" })}</Field>
         </div>
       </div>
 
       <div className="section">
-        <div className="section-title">The document</div>
+        <div className="section-title">What to make</div>
         <div className="field-grid">
-          <Field label="Document title" required full>{inp("title", { placeholder: "International Paper Cambridge: Water Program Capabilities" })}</Field>
-          <Field label="Type of document" required>{sel("kind", DOC_KINDS, "Choose one")}</Field>
-          <Field label="Prepared for (client / recipient)">{inp("client", { placeholder: "International Paper, Cambridge MD" })}</Field>
-          <Field label="Output format">{sel("format", FORMATS)}</Field>
-          <Field label="Length" hint="Pages, slides or a size, e.g. 11x17 poster">{inp("length", { placeholder: "6-8 pages" })}</Field>
-          <Field label="Audience" full>{inp("audience", { placeholder: "Plant manager and HSE manager; not water specialists" })}</Field>
-          <Field label="Purpose: what should the reader do or decide after reading it?" required full>
-            {area("purpose", "Approve SG to take over wastewater operations on Jan 1", 2)}
+          <Field label="Type" required>{sel("kind", DOC_KINDS, "Choose one")}</Field>
+          <Field label="Format">{sel("format", FORMATS, "Choose one")}</Field>
+          <Field label="Length">{inp("length", { placeholder: f.kind === "Slide deck" ? "4 slides" : "2 pages" })}</Field>
+          <Field label="Brand">{sel("brand", BRANDS)}</Field>
+          <Field label="Working title" required full>{inp("title", { placeholder: "WaterSolve + Solution Group: rep partnership overview" })}</Field>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-title">Who it's for</div>
+        <div className="field-grid">
+          <Field label="Audience" required full>{inp("audience", { placeholder: "Manufacturer rep firms that sell equipment to water and wastewater plants" })}</Field>
+          <Field label="Goal: what should they think or do after seeing it?" required full>
+            {area("purpose", "Want to talk with us about adding WaterSolve and Solution Group to their line card", 2)}
           </Field>
         </div>
       </div>
@@ -274,34 +281,16 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
       <div className="section">
         <div className="section-title">Content</div>
         <div className="field-grid">
-          <Field label="Outline: sections in order, and what goes in each" required={!f.content} full
-            hint="An outline or the content below is required. Both is best.">
-            {area("outline", "1. Cover: site photo, title, date\n2. Who we are: 1 paragraph + 3 stats\n3. Current situation: problems we found, with photos 2-4\n4. Our approach...\n5. Pricing table\n6. Next steps", 7)}
+          <Field label="Outline: each slide or section in order, and what goes in it" required full
+            hint="Point to the files for details, e.g. “projects from the attached Word doc”.">
+            {area("outline", "1. Who we are: WaterSolve + Solution Group overview, products and services (from the SOQ)\n2. Example projects and services, including sonar surveying\n3. Example product sales, including the treatability lab\n4. Why partner with us + contact", 6)}
           </Field>
-          <Field label="Key messages: the 2-4 things the reader must take away" full>
-            {area("messages", "We take over with no gap in coverage\nCompliance with permit No. 16 from day one", 3)}
+          <Field label="Must include word for word, or must avoid" full>
+            {area("mustInclude", "Taglines, numbers, legal text, names to leave out", 2)}
           </Field>
-          <Field label="Content, facts and numbers" required={!f.outline} full
-            hint="Paste everything the document should say: specs, prices, dates, names, results. Claude won't invent facts.">
-            {area("content", "Flows, permit limits, staffing, pricing, timelines, results, quotes...", 8)}
+          <Field label="Look and feel" full hint="Style, colors, or an example to match (attach it below).">
+            {inp("style", { placeholder: "Clean and photo-led, like our SOQ" })}
           </Field>
-          <Field label="Exact text to include word for word" full>
-            {area("exactText", "Legal language, approved taglines, terms that must appear exactly", 3)}
-          </Field>
-          <Field label="Avoid" full>{area("avoid", "Competitor names, internal costs, anything that must not appear", 2)}</Field>
-        </div>
-      </div>
-
-      <div className="section">
-        <div className="section-title">Design</div>
-        <div className="field-grid">
-          <Field label="Design style">{sel("style", STYLES)}</Field>
-          <Field label="Brand">{sel("brand", BRANDS)}</Field>
-          <Field label="Colors / brand notes" full>{inp("colors", { placeholder: "Use the client's navy alongside SG blue; no stock photos" })}</Field>
-          <Field label="Charts, tables or diagrams needed" full>
-            {area("charts", "Before/after TSS chart from the data sheet; process flow diagram of the treatment train", 2)}
-          </Field>
-          <Field label="Design reference links" full>{area("referenceLinks", "Links to documents or sites with the look you want", 2)}</Field>
         </div>
       </div>
 
@@ -315,7 +304,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
         >
           <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
           <div style={{ fontSize: 24, marginBottom: 6 }}>📷</div>
-          <div style={{ fontSize: 13, color: "#7a8a9a" }}>Drop photos and files or click to upload. Full resolution, up to {MAX_FILE_MB} MB each.</div>
+          <div style={{ fontSize: 13, color: "#7a8a9a" }}>Drop the source documents, photos, logos and any example to match. Full resolution, up to {MAX_FILE_MB} MB each.</div>
         </div>
         {files.length > 0 && (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -335,18 +324,13 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
                     </select>
                   </div>
                   <div className="field">
-                    <input placeholder="What it shows / where it goes (e.g. cover photo)" value={x.note} onChange={e => setFile(i, { note: e.target.value })} disabled={busy} />
+                    <input placeholder="What it is / where it goes (e.g. cover photo, slide 2)" value={x.note} onChange={e => setFile(i, { note: e.target.value })} disabled={busy} />
                   </div>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </div>
-
-      <div className="section">
-        <div className="section-title">Anything else</div>
-        <div className="field">{area("notes", "Context Chase should know: deal status, who asked for it, how it will be used", 3)}</div>
       </div>
 
       {err && <div className="err-banner"><span>⚠</span><span>{err}</span></div>}

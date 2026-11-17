@@ -390,6 +390,7 @@ const PIPELINE_FIELDS = [
   { key:"sgContactEmail",       label:"Primary SG Contact Email",       required:true,  placeholder:"twinkelman@solutionmgt.com" },
   { key:"customerContactName",  label:"Primary Customer Contact Name",  required:true,  placeholder:"John Doe" },
   { key:"customerContactEmail", label:"Primary Customer Contact Email", required:true,  placeholder:"jdoe@client.com" },
+  { key:"customerContactPhone", label:"Primary Customer Contact Phone", required:false, placeholder:"(555) 123-4567" },
   // Cost breakdown fields — parsed from uploaded docs, pushed to HubSpot
   { key:"managementCost",  label:"Management Cost",  required:false, placeholder:"$0" },
   { key:"equipmentCost",   label:"Equipment Cost",   required:false, placeholder:"$0" },
@@ -435,6 +436,7 @@ const OTHER_FIELDS = [
 const PROJECT_PROPOSAL_FIELDS = [
   { key:"clientLegalName",    label:"Client Legal Name",          required:true,  placeholder:"Sabrosura Foods, LLC" },
   { key:"clientShortName",    label:"Client Short Name",          required:false, placeholder:"Sabrosura" },
+  { key:"facilityAddress",    label:"Facility Address",           required:false, placeholder:"123 Industrial Blvd, Indianapolis, IN 46201" },
   { key:"projectTitle",       label:"Project Title",              required:true,  placeholder:"pH Adjust System Replacement" },
   { key:"proposalDate",       label:"Proposal Date",              required:false, type:"date" },
   { key:"projectLengthDays",  label:"Estimated Project Length (days)", required:true, placeholder:"60", type:"number" },
@@ -1052,6 +1054,7 @@ FIELD MAPPING:
 - "dealAmount": any total dollar figure — most important field. Include $ and commas.
 - "closeDate"/"proposalDate": any document date, format YYYY-MM-DD
 - "clientLegalName"/"clientShortName": client/customer name
+- "facilityAddress": street address of the customer's site or facility, with city, state and ZIP when shown
 - "projectTitle": main project heading
 - "executiveSummary": executive summary text (max 500 chars)
 - "inScope": in-scope items as newline-separated string
@@ -1063,6 +1066,7 @@ FIELD MAPPING:
 - "contractLengthDays": contract duration in days (1 month = 30 days, 1 year = 365 days)
 - "customerContactName": primary customer/client contact person full name
 - "customerContactEmail": primary customer/client contact email address
+- "customerContactPhone": primary customer/client contact phone number
 - "sourceSummary": key facts from the uploaded documents that the proposal writer will need but that do not fit another field: permit numbers, discharge limits and monitoring requirements, flows, current vendor/program, chemistry products and quantities, staffing, schedules, pricing assumptions. Plain lines, max 2500 characters. PDFs and images are not available to the writer, so capture what matters from them here.
 WATERSOLVE-ONLY FIELDS (fill only when suggestedDocType is "watersolve"; otherwise use empty strings):
 ${WS_PARSE_GUIDE}`;
@@ -1369,6 +1373,9 @@ ${WS_PARSE_GUIDE}`;
             newCompanyName:       formData.hsCompanyId ? "" : (formData.hsCompanyName || formData.clientLegalName || formData.clientName || ""),
             dealChoice:           formData.hsCompanyId ? (formData.hsDealId || "new") : "new",
             hubspotCompanyName:   formData.hsCompanyName || "",
+            customerContactPhone: formData.customerContactPhone || "",
+            customerContactTitle: formData.customerContactTitle || "",
+            companyAddress:       formData.facilityAddress || formData.customerAddress || formData.wsSiteLocation || "",
             generatedBy:          formData.generatedBy,
             dealSource:           formData.dealSource,
           }),

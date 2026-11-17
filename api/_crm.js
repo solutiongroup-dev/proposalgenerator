@@ -12,6 +12,27 @@ function splitLocation(location) {
   return parts.length ? { city: parts[0] } : {};
 }
 
+// A full address like "123 Main St, Ennis, TX 75119" or "37 Davis Swan Lane\nPurvis, MS 39475"
+// becomes HubSpot's address / city / state / zip. Anything that doesn't parse is left out.
+function parseAddress(text) {
+  const parts = String(text || '').split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
+  if (!parts.length) return {};
+  const out = {};
+  const last = parts[parts.length - 1];
+  const m = last.match(/^([A-Za-z]{2})(?:\s+(\d{5}(?:-\d{4})?))?$/) || last.match(/^(.*?)[\s,]+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+  if (m && m.length === 3) {           // "TX" or "TX 75119"
+    out.state = m[1].toUpperCase(); if (m[2]) out.zip = m[2];
+    if (parts.length >= 2) out.city = parts[parts.length - 2];
+    if (parts.length >= 3 && /^\d/.test(parts[parts.length - 3])) out.address = parts[parts.length - 3];
+  } else if (m && m.length === 4) {    // "Ennis TX 75119"
+    out.city = m[1]; out.state = m[2].toUpperCase(); out.zip = m[3];
+    if (parts.length >= 2 && /^\d/.test(parts[parts.length - 2])) out.address = parts[parts.length - 2];
+  } else if (parts.length === 2) {     // "Ennis, Texas"
+    return splitLocation(parts.join(', '));
+  }
+  return out;
+}
+
 async function searchOne(objectType, propertyName, value, properties) {
   const r = await hubspotRequest('POST', `/crm/v3/objects/${objectType}/search`, {
     filterGroups: [{ filters: [{ propertyName, operator: 'EQ', value }] }],
@@ -51,7 +72,7 @@ async function searchCompanies(q, domain) {
     .slice(0, 25);
 }
 
-async function useOrCreateCompany({ companyId, companyName, location, domain, ownerId }) {
+async function useOrCreateCompany({ companyId, companyName, location, address, domain, ownerId }) {
   if (companyId) {
     const c = await hubspotRequest('GET', `/crm/v3/objects/companies/${companyId}?properties=name`);
     return { id: c.id, name: c.properties?.name || companyName, existing: true };
@@ -60,7 +81,7 @@ async function useOrCreateCompany({ companyId, companyName, location, domain, ow
   const same = await searchOne('companies', 'name', companyName, ['name']);
   if (same) return { id: same.id, name: same.properties?.name || companyName, existing: true };
   const created = await hubspotRequest('POST', '/crm/v3/objects/companies', {
-    properties: { name: companyName, ...splitLocation(location), ...(domain ? { domain } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}) },
+    properties: { name: companyName, ...(address ? parseAddress(address) : splitLocation(location)), ...(domain ? { domain } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}) },
   });
   return { id: created.id, name: companyName, existing: false };
 }
@@ -85,6 +106,39 @@ function scopeHint(err, what) {
   return `${what}: ${err.message}`;
 }
 
+
+// ── Contact ─────────────────────────────────────────────────────────────────
+async function findOrCreateContact({ contactName, email, phone, jobtitle, companyName, ownerId }) {
+  const [firstname, ...rest] = String(contactName || '').trim().split(/\s+/).filter(Boolean);
+  const lastname = rest.join(' ');
+  if (email) {
+    const found = await searchOne('contacts', 'email', email, ['firstname', 'lastname', 'phone', 'jobtitle', 'company']);
+    if (found) {
+      // Fill in only what's missing; never overwrite what's already in HubSpot
+      const p = found.properties || {}, fill = {};
+      if (phone && !p.phone) fill.phone = phone;
+      if (firstname && !p.firstname) fill.firstname = firstname;
+      if (lastname && !p.lastname) fill.lastname = lastname;
+      if (jobtitle && !p.jobtitle) fill.jobtitle = jobtitle;
+      if (companyName && !p.company) fill.company = companyName;
+      if (Object.keys(fill).length) await hubspotRequest('PATCH', `/crm/v3/objects/contacts/${found.id}`, { properties: fill }).catch(() => {});
+      return { id: found.id, existing: true };
+    }
+  } else if (!contactName && !phone) {
+    return null;
+  } else if (phone) {
+    const byPhone = await searchOne('contacts', 'phone', phone, ['firstname', 'lastname']).catch(() => null);
+    const n = byPhone?.properties || {};
+    if (byPhone && (!firstname || String(n.firstname || '').toLowerCase() === firstname.toLowerCase())) return { id: byPhone.id, existing: true };
+  }
+  const created = await hubspotRequest('POST', '/crm/v3/objects/contacts', {
+    properties: {
+      ...(email ? { email } : {}), ...(firstname ? { firstname } : {}), ...(lastname ? { lastname } : {}),
+      ...(phone ? { phone } : {}), ...(jobtitle ? { jobtitle } : {}), ...(companyName ? { company: companyName } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}),
+    },
+  });
+  return { id: created.id, existing: false };
+}
 
 // ── Open deals linked to a company, for the proposal form's deal picker ─────
 let pipelinesCache = null;
@@ -119,4 +173,4 @@ async function companyDeals(companyId) {
   }).filter(d => !d.closed).sort((a, b) => String(b.created).localeCompare(String(a.created)));
 }
 
-module.exports = { FREE_MAIL, splitLocation, searchOne, searchCompanies, useOrCreateCompany, companyDeals, pipelineStages, link, dealUrl, scopeHint };
+module.exports = { FREE_MAIL, splitLocation, parseAddress, searchOne, findOrCreateContact, searchCompanies, useOrCreateCompany, companyDeals, pipelineStages, link, dealUrl, scopeHint };

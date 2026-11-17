@@ -38,31 +38,9 @@ module.exports.config = {
 
 // HTTP helper is shared with the lead route
 const { hubspotRequest } = require('./_hubspot');
-const { FREE_MAIL, useOrCreateCompany, pipelineStages, link } = require('./_crm');
+const { FREE_MAIL, useOrCreateCompany, findOrCreateContact, pipelineStages, link } = require('./_crm');
 
 // ── Find or create contact ────────────────────────────────────────────────────
-async function findOrCreateContact(email, firstName, lastName) {
-  if (!email) return null;
-  try {
-    const search = await hubspotRequest('POST', '/crm/v3/objects/contacts/search', {
-      filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: email }] }],
-      properties: ['email', 'firstname', 'lastname'],
-      limit: 1,
-    });
-    if (search.results?.length > 0) return search.results[0].id;
-  } catch(e) { console.log('Contact search failed, trying create:', e.message); }
-
-  try {
-    const contact = await hubspotRequest('POST', '/crm/v3/objects/contacts', {
-      properties: { email, firstname: firstName || '', lastname: lastName || '' },
-    });
-    return contact.id;
-  } catch(e) {
-    console.warn('Contact create failed:', e.message);
-    return null;
-  }
-}
-
 // ── Find HubSpot owner by email ───────────────────────────────────────────────
 async function findOwnerByEmail(email) {
   if (!email) return null;
@@ -148,6 +126,7 @@ module.exports = async function (req, res) {
       managementCost, equipmentCost, laborCost, technologyCost,
       projectLengthDays, contractLengthDays,
       companyId: rawCompanyId, newCompanyName, dealChoice: rawDealChoice, hubspotCompanyName,
+      customerContactPhone, customerContactTitle, companyAddress,
     } = body;
     // From the form's HubSpot section: the company picked (or a confirmed new one) and the
     // deal to update ('new' for a new deal). Older pages send neither and fall back to name matching.
@@ -251,7 +230,7 @@ module.exports = async function (req, res) {
       try {
         company = await useOrCreateCompany({
           companyId, companyName: String(newCompanyName || effectiveClientName).trim(),
-          location: '', domain: emailDomain && !FREE_MAIL.test(emailDomain) ? emailDomain : '', ownerId,
+          location: '', address: companyAddress, domain: emailDomain && !FREE_MAIL.test(emailDomain) ? emailDomain : '', ownerId,
         });
         await link('deals', dealId, 'companies', company.id);
       } catch (e) {
@@ -261,8 +240,15 @@ module.exports = async function (req, res) {
     }
 
     // Contact, linked to the deal and the company
-    const nameParts = (customerContactName || '').trim().split(/\s+/);
-    const contactId = await findOrCreateContact(customerContactEmail, nameParts[0] || '', nameParts.slice(1).join(' ') || '');
+    let contactId = null;
+    try {
+      const contact = await findOrCreateContact({
+        contactName: customerContactName, email: String(customerContactEmail || '').trim().toLowerCase(),
+        phone: String(customerContactPhone || '').trim(), jobtitle: String(customerContactTitle || '').trim(),
+        companyName: company?.name || effectiveClientName, ownerId,
+      });
+      contactId = contact?.id || null;
+    } catch (e) { console.warn('Contact step failed:', e.message); warnings.push(`The contact could not be added: ${e.message}`); }
     if (contactId) {
       try { await link('deals', dealId, 'contacts', contactId); console.log('Contact associated:', contactId); }
       catch(e) { console.warn('Contact association failed:', e.message); }

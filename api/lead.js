@@ -12,7 +12,7 @@
 
 const { requireAuth } = require('./_auth');
 const { hubspotRequest } = require('./_hubspot');
-const { FREE_MAIL, splitLocation, searchOne, searchCompanies, useOrCreateCompany, companyDeals, link, dealUrl, scopeHint } = require('./_crm');
+const { FREE_MAIL, splitLocation, searchOne, searchCompanies, useOrCreateCompany, findOrCreateContact, companyDeals, link, dealUrl, scopeHint } = require('./_crm');
 
 const PIPELINES = {
   Project:   { id: '2277462760', label: 'Project' },
@@ -50,36 +50,6 @@ async function prequalStage(pipelineKey) {
 }
 
 // ── Contact ───────────────────────────────────────────────────────────────────
-async function findOrCreateContact({ contactName, email, phone, companyName, ownerId }) {
-  const [firstname, ...rest] = String(contactName || '').trim().split(/\s+/).filter(Boolean);
-  const lastname = rest.join(' ');
-  if (email) {
-    const found = await searchOne('contacts', 'email', email, ['firstname', 'lastname', 'phone']);
-    if (found) {
-      // Fill in only what's missing; never overwrite what's already in HubSpot
-      const p = found.properties || {}, fill = {};
-      if (phone && !p.phone) fill.phone = phone;
-      if (firstname && !p.firstname) fill.firstname = firstname;
-      if (lastname && !p.lastname) fill.lastname = lastname;
-      if (Object.keys(fill).length) await hubspotRequest('PATCH', `/crm/v3/objects/contacts/${found.id}`, { properties: fill }).catch(() => {});
-      return { id: found.id, existing: true };
-    }
-  } else if (!contactName && !phone) {
-    return null;
-  } else if (phone) {
-    const byPhone = await searchOne('contacts', 'phone', phone, ['firstname', 'lastname']).catch(() => null);
-    const n = byPhone?.properties || {};
-    if (byPhone && (!firstname || String(n.firstname || '').toLowerCase() === firstname.toLowerCase())) return { id: byPhone.id, existing: true };
-  }
-  const created = await hubspotRequest('POST', '/crm/v3/objects/contacts', {
-    properties: {
-      ...(email ? { email } : {}), ...(firstname ? { firstname } : {}), ...(lastname ? { lastname } : {}),
-      ...(phone ? { phone } : {}), ...(companyName ? { company: companyName } : {}), ...(ownerId ? { hubspot_owner_id: ownerId } : {}),
-    },
-  });
-  return { id: created.id, existing: false };
-}
-
 function parseMoney(v) {
   const s = String(v || '').trim().toLowerCase().replace(/[$,\s]/g, '');
   const m = s.match(/^(\d+(?:\.\d+)?)(k|m|mm)?$/);

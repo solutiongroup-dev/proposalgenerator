@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { prepareBinaryFiles } from "./fileprep.js";
+import { prepareBinaryFiles, FileTooLargeError } from "./fileprep.js";
 import DesignRequest from "./DesignRequest.jsx";
 import { loadDraft, saveDraft, clearDraft, savedLabel, store } from "./draft.js";
 import WaterSolveForm, { WS_FIELDS, WS_PARSE_KEYS, WS_DEFAULTS, WS_PARSE_GUIDE, parseWsItems, wsItemsTotal, wsProposalNumber } from "./WaterSolveForm.jsx";
@@ -1114,7 +1114,7 @@ FIELD MAPPING:
 - "customerContactName": primary customer/client contact person full name
 - "customerContactEmail": primary customer/client contact email address
 - "customerContactPhone": primary customer/client contact phone number
-- "sourceSummary": key facts from the uploaded documents that the proposal writer will need but that do not fit another field: permit numbers, discharge limits and monitoring requirements, flows, current vendor/program, chemistry products and quantities, staffing, schedules, pricing assumptions. Plain lines, max 2500 characters. PDFs and images are not available to the writer, so capture what matters from them here.
+- "sourceSummary": key facts from the uploaded documents that the proposal writer will need but that do not fit another field: permit numbers, discharge limits and monitoring requirements, flows, current vendor/program, chemistry products and quantities, staffing, schedules, pricing assumptions. Copy EVERY priced line of Solution Group's pricing exactly as written (item, quantity, unit price, monthly/annual amount, totals), plus any optional or alternate prices. Plain lines, max 2500 characters. PDFs and images are not available to the writer, so capture what matters from them here.
 WATERSOLVE-ONLY FIELDS (fill only when suggestedDocType is "watersolve"; otherwise use empty strings):
 ${WS_PARSE_GUIDE}`;
 
@@ -1305,6 +1305,12 @@ ${WS_PARSE_GUIDE}`;
         }
         setLastFileContents(fileContents);
       }
+      // PDFs and images go to the writer too (their prices and details were only seen while
+      // reading the files), and so do the pasted notes
+      let fileBlocks = [];
+      try { fileBlocks = (await prepareBinaryFiles(files)).blocks; }
+      catch (e) { if (e instanceof FileTooLargeError) throw e; console.warn("Could not attach PDFs/images:", e.message); }
+      const sourceText = [...fileContents, ...(pastedText.trim() ? [`[Pasted notes]\n${pastedText.trim()}`] : [])];
       setGenStep(1);
       const nextHistory = isRevision ? [...revisionHistory, revision] : [];
 
@@ -1315,7 +1321,8 @@ ${WS_PARSE_GUIDE}`;
           docType,
           formData,
           pastedText,
-          fileContents,
+          fileContents: sourceText,
+          fileBlocks,
           optionalSections: formData.optionalSections || [],
           sectionOrder: formData.sectionOrder || null,
           ...(isRevision ? { previousConfig: lastConfig, revisionInstructions: revision, revisionHistory: nextHistory } : {}),

@@ -773,9 +773,11 @@ function parseConfig(raw) {
 }
 
 // Ask Claude for a config; if the reply can't be read, ask once more
-async function getConfig(prompt) {
+async function getConfig(prompt, blocks = []) {
+  // PDFs and images ride along ahead of the instructions, so Claude can read their prices and details
+  const content = blocks.length ? [...blocks, { type: 'text', text: prompt }] : prompt;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const cfg = parseConfig(await callClaude([{ role: 'user', content: prompt }]));
+    const cfg = parseConfig(await callClaude([{ role: 'user', content }]));
     if (cfg) return cfg;
     console.warn(`Unreadable config from Claude (attempt ${attempt})`);
   }
@@ -787,7 +789,7 @@ async function getConfig(prompt) {
 // by code (enforceCommercialRules), so Claude is told never to write them.
 const SHARED_RULES = `- Always write "Solution Group" in full, never "SG".
 - Never use placeholders such as [To be confirmed] or TBD. Omit anything you cannot fill from the data.
-- PRICES: use only dollar amounts given in the form or the source files (Solution Group's own price, sell price or cost build-up). Never estimate, round up to or invent a price, and never use the customer's current spend, budget or a competitor's price as our price. If no Solution Group price is given, still list the services but set each amount and the totals to null; the document shows them as "To be confirmed".
+- PRICES: use only dollar amounts given in the form or the source files (Solution Group's own price, sell price or cost build-up). Never estimate, round up to or invent a price, and never use the customer's current spend, budget or a competitor's price as our price. Read every source for our pricing first: attached PDFs and images, spreadsheets, pasted notes, the form fields (dealAmount, monthlyFeeTotal, cost fields) and sourceSummary. If only a total is known, show it as one line (e.g. "Monthly service fee") with that amount instead of splitting it. Only if no Solution Group price is given anywhere, list the services with each amount and the totals set to null; the document shows them as "To be confirmed".
 - Never use em dashes. Use commas or periods.
 - Never write sales tax, tax-exempt, or proposal-validity language anywhere. Those statements are inserted automatically in the Commercial Summary.
 - Never disclose markup, margin, or contingency percentages. Bake them into prices silently.
@@ -1071,6 +1073,11 @@ module.exports = async function (req, res) {
 
   try {
     const { docType, formData, fileContents, previousConfig, revisionInstructions, revisionHistory, optionalSections, sectionOrder } = req.body;
+    // Only well-formed PDF, image and text blocks are passed on to Claude
+    const fileBlocks = (Array.isArray(req.body.fileBlocks) ? req.body.fileBlocks : []).filter(b =>
+      b && ((b.type === 'text' && typeof b.text === 'string') ||
+        ((b.type === 'image' || b.type === 'document') && b.source?.type === 'base64' && typeof b.source.data === 'string'))).slice(0, 100);
+    const hasBinary = fileBlocks.some(b => b.type !== 'text');
     // Merge optionalSections into formData so prompts and injection logic can access it
     if (optionalSections?.length && formData) formData.optionalSections = optionalSections;
     // User-defined section order takes priority over everything
@@ -1086,7 +1093,7 @@ module.exports = async function (req, res) {
       if (docType === 'watersolve' && !Array.isArray(previousConfig.line_items)) {
         previousConfig.line_items = parseLineItems(formData?.wsLineItems);
       }
-      cfg = await getConfig(revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }));
+      cfg = await getConfig(revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }), fileBlocks);
     } else {
       // ── GENERATION MODE: build config from form data ──
       let prompt;
@@ -1168,7 +1175,7 @@ Return ONLY the document content — no preamble, no explanation.`
       }
       else throw new Error(`Unknown docType: ${docType}`);
 
-      cfg = await getConfig(prompt);
+      cfg = await getConfig(prompt, fileBlocks);
     }
 
     // On first generation: use formData for include_signature (form dropdown is authoritative)
@@ -1244,7 +1251,7 @@ Return ONLY the document content — no preamble, no explanation.`
     // and a large config does not fit in a response header.
     const warnings = docType === 'watersolve' ? [] : pricingWarnings(cfg, docType);
     const sources = [fileText, JSON.stringify(formData || {}), isRevision ? JSON.stringify(previousConfig) + ' ' + revisionInstructions + ' ' + (revisionHistory || []).join(' ') : ''].join(' ');
-    const unsourced = unsourcedAmounts(cfg, sources, docType);
+    const unsourced = hasBinary ? [] : unsourcedAmounts(cfg, sources, docType);
     if (unsourced.length) warnings.push(`These prices are not in your form, files or earlier versions, so Claude may have estimated them: ${unsourced.join('; ')}. Confirm or replace them.`);
     if (warnings.length) console.warn('Pricing check:', warnings.join(' | '));
     res.status(200).json({ filename, docBase64: buffer.toString('base64'), config: cfg, warnings });

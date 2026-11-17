@@ -97,7 +97,8 @@ export default function LoginGate({ children }) {
             style={{ width: "100%", background: "#2B579A", color: "white", border: "none", borderRadius: 8, padding: "12px", fontSize: 15, fontWeight: 600, fontFamily: "inherit", cursor: busy || !password ? "default" : "pointer", opacity: busy || !password ? 0.6 : 1 }}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
-          <p style={{ fontSize: 12, color: "#9aa5b4", marginTop: 16, textAlign: "center" }}>Don't have the password? Ask Chase.</p>
+          {/* TEMPORARY: shown while changes are being made. Remove before go-live. */}
+          <p style={{ fontSize: 13, color: "#4a5568", background: "#f2f5fa", borderRadius: 8, padding: "9px 12px", marginTop: 16, textAlign: "center" }}>Temporary password: <strong>1234</strong></p>
         </div>
       </form>
     </div>

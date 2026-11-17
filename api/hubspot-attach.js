@@ -9,6 +9,7 @@
  */
 
 const HUBSPOT_TOKEN = process.env.HUBSPOT_API_KEY;
+const { requireAuth } = require('./_auth');
 const FOLDER_PATH   = '/SG Document Generator';
 const NOTE_TO_DEAL  = 214; // HubSpot-defined association type: note → deal
 const DOCX_MIME     = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -65,10 +66,7 @@ async function createNoteOnDeal(dealId, fileId, filename) {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 module.exports = async function (req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+  if (!requireAuth(req, res)) return;
 
   if (!HUBSPOT_TOKEN) {
     res.status(500).json({ error: 'HUBSPOT_API_KEY not configured.' });

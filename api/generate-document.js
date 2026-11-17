@@ -234,6 +234,78 @@ function coverPage(cfg) {
   ];
 }
 
+// Arithmetic check on the finished pricing: Claude writes the numbers, so verify that every
+// table adds up before anyone sends the document. Returns plain-English warnings.
+function pricingWarnings(cfg, docType) {
+  const out = [];
+  const money = v => { if (typeof v === 'number') return v; const m = String(v ?? '').replace(/,/g, '').match(/-?\$?\s*(\d+(?:\.\d+)?)/); return m && /\d/.test(String(v)) && !/%/.test(String(v)) ? Number(m[1]) * (/^\s*-/.test(String(v)) ? -1 : 1) : null; };
+  const off = (a, b) => Math.abs(a - b) > Math.max(2, Math.abs(b) * 0.001);
+  const usd = n => '$' + Math.round(n).toLocaleString('en-US');
+  for (const [key, t] of Object.entries(cfg.table_sections || {})) {
+    if (!t || !Array.isArray(t.rows) || !Array.isArray(t.total_row)) continue;
+    t.total_row.forEach((cell, col) => {
+      const total = money(cell); if (col === 0 || total === null) return;
+      const vals = t.rows.map(r => money(r[col])).filter(v => v !== null);
+      if (vals.length < 1) return;
+      const sum = vals.reduce((a, b) => a + b, 0);
+      if (off(sum, total)) out.push(`"${t.title || key}": the rows add up to ${usd(sum)} but the total says ${usd(total)}.`);
+    });
+  }
+  const p = cfg.pricing || {};
+  const shown = !Array.isArray(cfg.section_order) || !cfg.section_order.length || cfg.section_order.includes('commercial_summary');
+  if (docType === 'project' && shown && Array.isArray(p.categories) && p.categories.some(c => money(c.amount)) && money(p.total) !== null) {
+    const sum = p.categories.reduce((a, c) => a + (money(c.amount) || 0), 0);
+    if (off(sum, money(p.total))) out.push(`Commercial Summary: the categories add up to ${usd(sum)} but the total says ${usd(money(p.total))}.`);
+  }
+  if (docType === 'proposal' && shown && Array.isArray(p.line_items) && p.line_items.length && money(p.monthly_total) !== null) {
+    const sum = p.line_items.reduce((a, l) => a + (money(l.monthly) || 0), 0);
+    if (sum && off(sum, money(p.monthly_total))) out.push(`Commercial Summary: the monthly lines add up to ${usd(sum)} but the monthly total says ${usd(money(p.monthly_total))}.`);
+  }
+  // When the main table was replaced by several tables, compare their base total to the original total
+  if (docType === 'project' && !shown && money(p.total) !== null) {
+    const base = Object.values(cfg.table_sections || {}).filter(t => t && !/option|add-on|addon|alternate/i.test(t.title || ''))
+      .map(t => Array.isArray(t.total_row) ? money(t.total_row[t.total_row.length - 1]) : null).filter(v => v !== null);
+    if (base.length > 1) { const sum = base.reduce((a, b) => a + b, 0); if (off(sum, money(p.total))) out.push(`The base pricing tables add up to ${usd(sum)}, but the project total was ${usd(money(p.total))}. Confirm which is right.`); }
+  }
+  return out;
+}
+
+function unsourcedAmounts(cfg, sources, docType) {
+  if (docType === 'watersolve') return [];
+  const nums = text => (String(text).match(/\d[\d,]*(?:\.\d+)?/g) || []).map(x => Number(x.replace(/,/g, ''))).filter(n => n >= 100);
+  const known = new Set();
+  for (const n of nums(sources)) for (const v of [n, n * 12, n / 12, n * 4, n / 4]) known.add(Math.round(v));
+  const isKnown = n => [-1, 0, 1].some(d => known.has(Math.round(n) + d));
+  const money = v => { const m = String(v ?? '').replace(/,/g, '').match(/\$\s*(\d+(?:\.\d+)?)/) || (typeof v === 'number' ? [0, v] : null); return m ? Number(m[1]) : null; };
+  const found = [];
+  const consider = (label, amounts, totals) => {
+    const vals = amounts.filter(v => v !== null && v >= 100);
+    for (const v of vals) {
+      if (isKnown(v)) continue;
+      // a subtotal of other known amounts in the same table is fine
+      if (totals && vals.length > 1 && Math.abs(vals.filter(x => x !== v).reduce((a, b) => a + b, 0) - v) < 2) continue;
+      found.push(`${label}: $${Math.round(v).toLocaleString('en-US')}`);
+    }
+  };
+  for (const [key, t] of Object.entries(cfg.table_sections || {})) {
+    if (!t || !Array.isArray(t.rows)) continue;
+    t.rows.forEach(r => consider(`"${t.title || key}" ${r[0] || ''}`.trim(), r.slice(1).map(money), false));
+  }
+  const p = cfg.pricing || {};
+  (p.categories || []).forEach(c => consider(`Commercial Summary ${c.name || ''}`.trim(), [money(c.amount ?? '') ?? (typeof c.amount === 'number' ? c.amount : null)], false));
+  (p.line_items || []).forEach(l => consider(`Commercial Summary ${l.description || ''}`.trim(), [typeof l.monthly === 'number' ? l.monthly : money(l.monthly)], false));
+  return found.slice(0, 8);
+}
+
+// The content of a section key from section_order, wherever the config holds it
+function sectionContentFor(cfg, key) {
+  const pick = v => (typeof v === 'string' && v.trim()) || (Array.isArray(v) && v.length && v.every(x => typeof x === 'string')) ? v
+    : (v && typeof v === 'object' && !Array.isArray(v) && (v.content || v.body || v.text)) || null;
+  const found = pick((cfg.additional_sections || {})[key]) || pick((cfg.sections || {})[key]) || pick(cfg[key]);
+  if (!found) console.warn(`Section "${key}" is in section_order but has no content`);
+  return found;
+}
+
 // ── Table sections (e.g. a chemistry program priced per product) ─────────────
 function tableSection(num, t) {
   const cols = t.columns || [];
@@ -283,9 +355,9 @@ function buildProposal(cfg) {
       new TableCell({ borders: brd, width: { size: 5400, type: WidthType.DXA }, shading: { fill: i % 2 === 0 ? WHITE : LGRAY, type: ShadingType.CLEAR }, margins: mg,
         children: [new Paragraph({ children: [new TextRun({ text: li.description || '', size: 20, color: GRAY, font: 'Calibri' })] })] }),
       new TableCell({ borders: brd, width: { size: 1980, type: WidthType.DXA }, shading: { fill: i % 2 === 0 ? WHITE : LGRAY, type: ShadingType.CLEAR }, margins: mg,
-        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(li.monthly, cfg), size: 20, color: GRAY, font: 'Calibri' })] })] }),
+        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(li.monthly, cfg) || 'To be confirmed', size: 20, color: GRAY, font: 'Calibri' })] })] }),
       new TableCell({ borders: brd, width: { size: 1980, type: WidthType.DXA }, shading: { fill: i % 2 === 0 ? WHITE : LGRAY, type: ShadingType.CLEAR }, margins: mg,
-        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(annual(li.monthly), cfg), size: 20, color: GRAY, font: 'Calibri' })] })] }),
+        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(annual(li.monthly), cfg) || 'To be confirmed', size: 20, color: GRAY, font: 'Calibri' })] })] }),
     ]
   }));
 
@@ -294,9 +366,9 @@ function buildProposal(cfg) {
       new TableCell({ borders: brd, width: { size: 5400, type: WidthType.DXA }, shading: { fill: LBLUE, type: ShadingType.CLEAR }, margins: mg,
         children: [new Paragraph({ children: [new TextRun({ text: 'Total Monthly Service Fee', bold: true, size: 22, color: BLUE, font: 'Calibri' })] })] }),
       new TableCell({ borders: brd, width: { size: 1980, type: WidthType.DXA }, shading: { fill: LBLUE, type: ShadingType.CLEAR }, margins: mg,
-        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(pricing.monthly_total, cfg), bold: true, size: 22, color: BLUE, font: 'Calibri' })] })] }),
+        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(pricing.monthly_total, cfg) || 'To be confirmed', bold: true, size: 22, color: BLUE, font: 'Calibri' })] })] }),
       new TableCell({ borders: brd, width: { size: 1980, type: WidthType.DXA }, shading: { fill: LBLUE, type: ShadingType.CLEAR }, margins: mg,
-        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(pricing.annual_total || annual(pricing.monthly_total), cfg), bold: true, size: 22, color: BLUE, font: 'Calibri' })] })] }),
+        children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: fmt(pricing.annual_total || annual(pricing.monthly_total), cfg) || 'To be confirmed', bold: true, size: 22, color: BLUE, font: 'Calibri' })] })] }),
     ]
   });
 
@@ -322,6 +394,9 @@ function buildProposal(cfg) {
       ...(pricing.pricing_notes || []).map(n => body(n, { italic: true })),
       ...spacer(2),
     ],
+    timeline: () => Array.isArray(cfg.timeline) && cfg.timeline.length
+      ? tableSection(sn(), { title: 'Timeline', columns: ['Timeframe', 'Activity'], rows: cfg.timeline.map(r => [r.timeframe || '', r.activity || '']) })
+      : (typeof cfg.timeline === 'string' && cfg.timeline.trim() ? [blueBar(`${sn()}. Timeline`), ...spacer(1), body(cfg.timeline), ...spacer(2)] : []),
     assumptions: () => [
       blueBar(`${sn()}. Key Assumptions & Exclusions`), ...spacer(1),
       ...(cfg.assumptions_exclusions || []).map(bullet), ...spacer(2),
@@ -341,8 +416,8 @@ function buildProposal(cfg) {
   const sectionContent = proposalSectionOrder.flatMap(key => {
     if (PROPOSAL_SECTION_RENDERERS[key]) return PROPOSAL_SECTION_RENDERERS[key]();
     if (cfg.table_sections?.[key]) return tableSection(sn(), cfg.table_sections[key]);
-    // Custom / optional section
-    const customContent = (cfg.additional_sections || {})[key];
+    // Custom / optional section: Claude may put it in additional_sections, sections, or at the top level
+    const customContent = sectionContentFor(cfg, key);
     if (customContent) {
       const title = OPTIONAL_SECTION_CONTENT[key]?.title || key.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase());
       return [
@@ -482,7 +557,7 @@ function buildAssessment(cfg) {
 // ── PROJECT PROPOSAL BUILDER (v6-aligned) ────────────────────────────────────
 function buildProject(cfg) {
   const pricing = cfg.pricing || {};
-  const categories = pricing.categories || [];
+  const categories = (pricing.categories || []).filter(c => fmt(c.amount, cfg) !== '');
   const timeline = cfg.timeline || [];
   const sections = cfg.sections || {};
   const c = cfg.client || {};
@@ -617,7 +692,7 @@ function buildProject(cfg) {
     }
     if (cfg.table_sections?.[key]) return tableSection(sn(), cfg.table_sections[key]);
     // Custom section — look up in additional_sections or sections object
-    const customContent = (cfg.additional_sections || {})[key] || (cfg.sections || {})[key];
+    const customContent = sectionContentFor(cfg, key);
     if (customContent) {
       const title = OPTIONAL_SECTION_CONTENT[key]?.title || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       return [
@@ -712,6 +787,7 @@ async function getConfig(prompt) {
 // by code (enforceCommercialRules), so Claude is told never to write them.
 const SHARED_RULES = `- Always write "Solution Group" in full, never "SG".
 - Never use placeholders such as [To be confirmed] or TBD. Omit anything you cannot fill from the data.
+- PRICES: use only dollar amounts given in the form or the source files (Solution Group's own price, sell price or cost build-up). Never estimate, round up to or invent a price, and never use the customer's current spend, budget or a competitor's price as our price. If no Solution Group price is given, still list the services but set each amount and the totals to null; the document shows them as "To be confirmed".
 - Never use em dashes. Use commas or periods.
 - Never write sales tax, tax-exempt, or proposal-validity language anywhere. Those statements are inserted automatically in the Commercial Summary.
 - Never disclose markup, margin, or contingency percentages. Bake them into prices silently.
@@ -934,10 +1010,10 @@ function applySectionChoices(cfg, formData) {
 
 // ── Revision prompt: edit the existing document as the user asks ─────────────
 const REVISABLE = {
-  proposal:   'sections.introduction, sections.service_confirmation, pricing (monthly_total, annual_total, line_items[{description, monthly}]), assumptions_exclusions[], next_steps[], include_signature, additional_sections, section_order. Built-in section keys: introduction, service_confirmation, commercial_summary, assumptions, next_steps.',
-  project:    'sections.introduction, sections.project_confirmation, sections.engineering_scope, pricing (total, categories[{name, amount}], contingency_notes[], pricing_notes[]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, section_order. Built-in section keys: introduction, project_confirmation, engineering_scope, commercial_summary, timeline, assumptions, next_steps.',
+  proposal:   'sections.introduction, sections.service_confirmation, pricing (monthly_total, annual_total, line_items[{description, monthly}]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, table_sections, section_order. Built-in section keys: introduction, service_confirmation, commercial_summary, timeline, assumptions, next_steps.',
+  project:    'sections.introduction, sections.project_confirmation, sections.engineering_scope, pricing (total, categories[{name, amount}], contingency_notes[], pricing_notes[]), timeline[{timeframe, activity}], assumptions_exclusions[], next_steps[], include_signature, additional_sections, table_sections, section_order. Built-in section keys: introduction, project_confirmation, engineering_scope, commercial_summary, timeline, assumptions, next_steps.',
   assessment: 'executive_summary, site_overview, regulatory, systems[{name, current_state, findings[], risks[], recommendations[]}], staffing_model.',
-  watersolve: 'salutation, opening, executive_summary, bid_items[], includes_products[], includes_equipment[], includes_labor[], schedule_summary, exclusions[], quote_assumptions[], project_description_line, and line_items[{qty, uom, item, description, unitPrice}] (the priced table; amounts are qty x unitPrice and are calculated for you).',
+  watersolve: 'salutation, opening, executive_summary, bid_items[], includes_products[], includes_equipment[], includes_labor[], schedule_summary, exclusions[], quote_assumptions[], project_description_line, and line_items[{qty, uom, item, description, unitPrice, group}] (the priced table; amounts are qty x unitPrice and are calculated for you). To split the price table into options or phases, give every line item a group name (e.g. "Option A: Dredging only") in the order they should appear; each group gets its own subtotal. Set options_are_alternatives to true when the customer picks one group instead of buying all of them (no grand total is shown then). A line item may appear in more than one group. Keep bid_items item_index matching the line item order.',
 };
 
 function revisionPrompt({ docType, previousConfig, revisionInstructions, revisionHistory, formData, fileText }) {
@@ -965,11 +1041,18 @@ ${fileText}
 ` : ''}
 WHAT YOU CAN CHANGE: ${REVISABLE[docType] || REVISABLE.project}
 
+PRICING RULES (always, also after this change):
+- Never show markup, margin or contingency, as a line, a percentage or a note. If the source prices exclude contingency, spread it into the item prices proportionally so every table adds up to the stated totals.
+- Every table total must equal the sum of its rows, and any overall total must equal the sum of the tables it covers. Optional or alternative tables are never added into the base total.
+- Never invent a price. Use amounts from the current config, the form or the source files only.
+
 HOW TO APPLY THE CHANGE:
 - Make the change everywhere it matters, not just the first place. If a price changes, update every dependent total so the numbers add up. If a fact changes, update every sentence that states it.
 - Rewrite, shorten, expand, reorder, or change tone with real editorial judgment. "Shorter" means materially shorter.
 - To add a section: put its content in additional_sections.<snake_case_key> (paragraphs separated by blank lines, or an array of bullets) and set section_order to the complete ordered list of section keys, including the new one. To remove a section, leave its key out of section_order. To rename one, use a new key with the new title.
 - To add or remove a signature block, set include_signature to true or false.
+- PRICING STRUCTURE CHANGES (split into several tables, separate options or add-ons, phases, alternates): build each priced table in table_sections.<snake_case_key> = { "title": "Optional Add-Ons", "intro": "one optional sentence", "columns": ["Service", "Monthly", "Annual"], "align": ["left", "right", "right"], "rows": [["Weekend coverage", "$2,400", "$28,800"]], "total_row": ["Total", "$2,400", "$28,800"], "notes": ["optional note"] } with amounts as formatted text, and put each key in section_order where the table belongs. Keep the main pricing (commercial_summary) for the base scope and keep its numbers consistent with the new tables; to replace the main table entirely, leave commercial_summary out of section_order. Every table needs at least one row. Totals must add up.
+- SCHEDULE CHANGES (a dependency, a prerequisite, shifted dates): rewrite timeline as rows in order, with the prerequisite as its own row and every later row's timeframe stated relative to it (e.g. "After reroute + Weeks 1-2"), and add timeline to section_order if it is missing. Update any sentence elsewhere that states the old schedule.
 - Leave everything the request does not touch exactly as it is.
 - Keep every fact appearing once. If the change introduces something already stated elsewhere, remove the older copy.
 - Never use em dashes. Never invent dollar amounts the user or the source files did not give.
@@ -1127,6 +1210,18 @@ Return ONLY the document content — no preamble, no explanation.`
       enforceCommercialRules(cfg, isRevision && /\btax|\bvalid/i.test(revisionInstructions));
     }
 
+    // A revision that leaves the document unchanged must not look like it worked
+    if (isRevision) {
+      const norm = o => JSON.stringify(o, (k, v) => (v && typeof v === 'object' && !Array.isArray(v)) ? Object.keys(v).sort().reduce((a, key) => (a[key] = v[key], a), {}) : v);
+      const before = { ...previousConfig }, after = { ...cfg };
+      delete before.include_signature; delete after.include_signature;
+      if (norm(before) === norm(after)) {
+        console.warn('Revision produced no change:', String(revisionInstructions).slice(0, 200));
+        res.status(200).json({ unchanged: true, error: "Claude didn't change the document for that request. Try saying exactly what should change and where, e.g. \"Add a second pricing table titled Optional Add-Ons with weekend coverage at $2,400/month\"." });
+        return;
+      }
+    }
+
     // 3. Build the docx
     let doc;
     if (docType === 'proposal')        doc = buildProposal(cfg);
@@ -1147,7 +1242,12 @@ Return ONLY the document content — no preamble, no explanation.`
 
     // JSON, not a binary download: the client needs the config to make later revisions,
     // and a large config does not fit in a response header.
-    res.status(200).json({ filename, docBase64: buffer.toString('base64'), config: cfg });
+    const warnings = docType === 'watersolve' ? [] : pricingWarnings(cfg, docType);
+    const sources = [fileText, JSON.stringify(formData || {}), isRevision ? JSON.stringify(previousConfig) + ' ' + revisionInstructions + ' ' + (revisionHistory || []).join(' ') : ''].join(' ');
+    const unsourced = unsourcedAmounts(cfg, sources, docType);
+    if (unsourced.length) warnings.push(`These prices are not in your form, files or earlier versions, so Claude may have estimated them: ${unsourced.join('; ')}. Confirm or replace them.`);
+    if (warnings.length) console.warn('Pricing check:', warnings.join(' | '));
+    res.status(200).json({ filename, docBase64: buffer.toString('base64'), config: cfg, warnings });
 
   } catch (err) {
     res.status(500).json({ error: err.message });

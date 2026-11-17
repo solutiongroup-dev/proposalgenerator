@@ -552,6 +552,7 @@ function buildParsePrompt(docType, pastedText, fileNames) {
     ...(docType==="assessment" ? ASSESSMENT_FIELDS : docType==="proposal" ? PROPOSAL_FIELDS : docType==="project" ? PROJECT_PROPOSAL_FIELDS : docType==="watersolve" ? WS_PARSE_KEYS.map(key => ({ key })) : OTHER_FIELDS),
   ].map(f => f.key).filter(k => k !== 'generatedBy' && k !== 'pipeline');
   return `You are a data extraction assistant for Solution Group. Extract fields from the provided files/text.
+Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. When a date in the material has no year, use its next upcoming occurrence (never a past year).
 ${pastedText ? `\nPASTED TEXT:\n${pastedText}\n` : ""}
 ${fileNames.length ? `Files provided: ${fileNames.join(", ")}` : ""}
 
@@ -563,8 +564,9 @@ ${JSON.stringify([...allKeys, "sourceSummary"])}
 FIELD MAPPING GUIDANCE:
 - "sgContactName": look for SG rep or "Prepared By". Default to "Ted Winkelman" if not found.
 - "sgContactEmail": default to "twinkelman@solutionmgt.com" if not found.
-- "dealAmount": look for ANY total dollar figure — "TOTAL PROJECT INVESTMENT", "Total", "Grand Total". Include $ and commas exactly, e.g. "$209,509.48". Most important field.
-- "closeDate": use proposal date as best-guess. Format YYYY-MM-DD.
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48".
+- "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
+- "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
 - "proposalDate": look for "Proposal Date" or document date. Format YYYY-MM-DD.
 - "clientLegalName" / "clientShortName": look for "Prepared For" or client name on cover.
 - "projectTitle": main project heading or title.
@@ -1075,6 +1077,7 @@ export default function App() {
        .filter(k => k !== 'generatedBy' && k !== 'pipeline'); // never parse these from docs
 
       const prompt = `You are a data extraction assistant for Solution Group. Extract fields from the provided files/text and determine what type of document this is.
+Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. When a date in the material has no year, use its next upcoming occurrence (never a past year).
 
 ${pastedText ? "PASTED TEXT:\n" + pastedText + "\n" : ""}
 ${files.length ? "Files: " + files.map(f=>f.name).join(", ") : ""}
@@ -1093,8 +1096,10 @@ Extract values for these keys: ${JSON.stringify([...allKeys, "suggestedDocType"]
 FIELD MAPPING:
 - "sgContactName": default "Ted Winkelman" if not found
 - "sgContactEmail": default "twinkelman@solutionmgt.com" if not found
-- "dealAmount": any total dollar figure — most important field. Include $ and commas.
-- "closeDate"/"proposalDate": any document date, format YYYY-MM-DD
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48".
+- "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
+- "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
+- "proposalDate": the proposal or document date, YYYY-MM-DD
 - "clientLegalName"/"clientShortName": client/customer name
 - "facilityAddress": street address of the customer's site or facility, with city, state and ZIP when shown
 - "projectTitle": main project heading
@@ -1328,12 +1333,18 @@ ${WS_PARSE_GUIDE}`;
       if (docType === "watersolve" && Array.isArray(cfg?.line_items)) {
         const items = cfg.line_items.map(({ amount, ...li }) => li);
         setField("wsLineItems", JSON.stringify(items));
-        const t = wsItemsTotal(items);
+        // Options the customer chooses between: the deal is worth the largest option, not their sum
+        const groups = [...new Set(items.map(li => li.group || ""))];
+        const t = cfg.options_are_alternatives && groups.length > 1
+          ? Math.max(...groups.map(g => wsItemsTotal(items.filter(li => (li.group || "") === g))))
+          : wsItemsTotal(items);
         if (t > 0) { formData.dealAmount = fmtMoney(t); setField("dealAmount", formData.dealAmount); }
       } else if (docType === "project" && isRevision && Number(cfg?.pricing?.total) > 0) {
         formData.dealAmount = fmtMoney(cfg.pricing.total); setField("dealAmount", formData.dealAmount);
       }
 
+      // The server checks that every pricing table adds up; show anything to fix before sending
+      if (result.warnings?.length) setGenErr(`Downloaded, but check the pricing before sending:\n• ${result.warnings.join('\n• ')}`);
       const bytes = Uint8Array.from(atob(result.docBase64), c => c.charCodeAt(0));
       const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       // Filename: {Company} {3-word description} - {M.DD}, plus v2, v3... for revisions

@@ -51,6 +51,7 @@ function parseLineItems(raw) {
         item: String(li.item || '').trim(),
         description: String(li.description || '').trim(),
         unitPrice: isFinite(unitPrice) ? unitPrice : 0,
+        group: String(li.group || '').trim(),
       };
     })
     .filter(li => li.item || li.description || li.unitPrice)
@@ -139,6 +140,60 @@ function standardTerms() {
   ];
 }
 
+// Price table rows. Line items with a group (options or phases) get a heading row and a
+// subtotal per group; alternatives (the customer picks one) show no grand total.
+function pricedRows(items, W, prelim, total, alternatives) {
+  const span5 = W.slice(0, 5).reduce((a, b) => a + b);
+  const itemRow = (li, n) => new TableRow({ children: [
+    cell(String(n), W[0]), cell(li.item || li.description, W[1]), cell(qtyText(li.qty), W[2]),
+    cell(li.uom, W[3]), cell(letterUnitPrice(li), W[4]), cell(money(li.amount), W[5]),
+  ] });
+  const groups = [...new Set(items.map(li => li.group))];
+  if (groups.length <= 1 || groups.every(g => !g)) {
+    return [...items.map((li, i) => itemRow(li, i + 1)),
+      new TableRow({ children: [cell(`${prelim ? 'PRELIMINARY ' : ''}TOTAL`, span5, { span: 5 }), cell(money(total), W[5], { bold: true })] })];
+  }
+  const rows = [];
+  let n = 0;
+  for (const g of groups) {
+    const gi = items.filter(li => li.group === g);
+    rows.push(new TableRow({ children: [cell(g || 'Other items', span5 + W[5], { span: 6, bold: true, fill: 'E8EEF7' })] }));
+    for (const li of gi) rows.push(itemRow(li, ++n));
+    rows.push(new TableRow({ children: [cell(`${g || 'Other items'} ${alternatives ? 'total' : 'subtotal'}`, span5, { span: 5, bold: true }), cell(money(gi.reduce((s, li) => s + li.amount, 0)), W[5], { bold: true })] }));
+  }
+  if (!alternatives) rows.push(new TableRow({ children: [cell(`${prelim ? 'PRELIMINARY ' : ''}TOTAL`, span5, { span: 5 }), cell(money(total), W[5], { bold: true })] }));
+  return rows;
+}
+
+// Quote rows: grouped like the letter. Each group (option or phase) has a heading and a total.
+function quoteRows(items, LW, total, alternatives, freightIncluded) {
+  const itemRow = li => new TableRow({ children: [
+    cell(`${qtyText(li.qty)} ${isLumpSum(li.uom) ? 'each' : li.uom.toLowerCase()}`, LW[0]),
+    cell(li.item, LW[1]), cell(li.description, LW[2], { size: 20 }),
+    cell(quoteUnitPrice(li), LW[3]), cell(money(li.amount), LW[4], { align: AlignmentType.RIGHT }),
+  ] });
+  const totalRow = (label, amount) => new TableRow({ children: [
+    cell('', LW[0], { borders: noBorders }), cell('', LW[1], { borders: noBorders }), cell('', LW[2], { borders: noBorders }),
+    cell(label, LW[3], { borders: noBorders, align: AlignmentType.RIGHT }), cell(money(amount), LW[4], { bold: true, align: AlignmentType.RIGHT }),
+  ] });
+  const freight = freightIncluded ? [new TableRow({ children: [
+    cell('', LW[0]), cell('Freight', LW[1]), cell('included with items listed above', LW[2], { size: 20 }), cell('', LW[3]), cell('', LW[4]),
+  ] })] : [];
+  const groups = [...new Set(items.map(li => li.group))];
+  if (groups.length <= 1 || groups.every(g => !g)) return [...items.map(itemRow), ...freight, totalRow('Total : ', total)];
+  const full = LW.reduce((a, b) => a + b);
+  const rows = [];
+  for (const g of groups) {
+    const gi = items.filter(li => li.group === g);
+    rows.push(new TableRow({ children: [cell(g || 'Other items', full, { span: 5, bold: true, fill: 'E8EEF7' })] }));
+    rows.push(...gi.map(itemRow));
+    rows.push(totalRow(`${g ? g.split(':')[0] : 'Other items'} total : `, gi.reduce((s, li) => s + li.amount, 0)));
+  }
+  rows.push(...freight);
+  if (!alternatives) rows.push(totalRow('Total : ', total));
+  return rows;
+}
+
 // ── LETTER layout ─────────────────────────────────────────────────────────────
 function buildLetter(cfg, f, items, total) {
   const prelim = f.wsPreliminary === 'yes';
@@ -172,14 +227,7 @@ function buildLetter(cfg, f, items, total) {
     width: { size: W.reduce((a, b) => a + b), type: WidthType.DXA }, columnWidths: W,
     rows: [
       new TableRow({ tableHeader: true, children: ['Item No.', 'Description', 'Estimated Quantity', 'Unit of Measure', 'Unit Price', 'Amount'].map((h, i) => cell(h, W[i])) }),
-      ...items.map((li, i) => new TableRow({ children: [
-        cell(String(i + 1), W[0]), cell(li.item || li.description, W[1]), cell(qtyText(li.qty), W[2]),
-        cell(li.uom, W[3]), cell(letterUnitPrice(li), W[4]), cell(money(li.amount), W[5]),
-      ] })),
-      new TableRow({ children: [
-        cell(`${prelim ? 'PRELIMINARY ' : ''}TOTAL`, W.slice(0, 5).reduce((a, b) => a + b), { span: 5 }),
-        cell(money(total), W[5], { bold: true }),
-      ] }),
+      ...pricedRows(items, W, prelim, total, cfg.options_are_alternatives === true),
     ],
   });
 
@@ -306,21 +354,7 @@ function buildQuote(cfg, f, items, total) {
     width: { size: FULL, type: WidthType.DXA }, columnWidths: LW,
     rows: [
       new TableRow({ tableHeader: true, children: ['Quantity', 'Item Code', 'Description', 'Unit Price', 'Amount*'].map((h, i) => hdr(h, LW[i])) }),
-      ...items.map(li => new TableRow({ children: [
-        cell(`${qtyText(li.qty)} ${isLumpSum(li.uom) ? 'each' : li.uom.toLowerCase()}`, LW[0]),
-        cell(li.item, LW[1]),
-        cell(li.description, LW[2], { size: 20 }),
-        cell(quoteUnitPrice(li), LW[3]),
-        cell(money(li.amount), LW[4], { align: AlignmentType.RIGHT }),
-      ] })),
-      ...(f.wsFreight !== 'separate' ? [new TableRow({ children: [
-        cell('', LW[0]), cell('Freight', LW[1]), cell('included with items listed above', LW[2], { size: 20 }), cell('', LW[3]), cell('', LW[4]),
-      ] })] : []),
-      new TableRow({ children: [
-        cell('', LW[0], { borders: noBorders }), cell('', LW[1], { borders: noBorders }), cell('', LW[2], { borders: noBorders }),
-        cell('Total : ', LW[3], { borders: noBorders, align: AlignmentType.RIGHT }),
-        cell(money(total), LW[4], { bold: true, align: AlignmentType.RIGHT }),
-      ] }),
+      ...quoteRows(items, LW, total, cfg.options_are_alternatives === true, f.wsFreight !== 'separate'),
     ],
   });
 

@@ -702,6 +702,26 @@ function friendlyError(status, detail) {
   return detail || `Request failed (${status}).`;
 }
 
+// Claude's field answers are a JSON object; tolerate fences, stray text, smart quotes and trailing commas
+function readJsonAnswer(raw) {
+  const text = String(raw || "").replace(/```json|```/g, "").replace(/[“”]/g, '"').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  for (const candidate of [m[0], m[0].replace(/,\s*([}\]])/g, "$1")]) {
+    try { const o = JSON.parse(candidate); if (o && typeof o === "object") return o; } catch (e) {}
+  }
+  return null;
+}
+// Ask Claude for the fields; if the answer can't be read, ask once more before giving up
+async function askForJson(content) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const o = readJsonAnswer(await callClaude(content, 5000));
+    if (o) return o;
+    console.warn(`Unreadable field answer from Claude (attempt ${attempt})`);
+  }
+  throw new Error("Claude's answer couldn't be read. Please try again. If it keeps happening, paste the key details as text instead of attaching files.");
+}
+
 async function callClaude(messageContent, maxTokens=8000, attempt=1) {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 290000); // server allows 300 s
@@ -787,6 +807,7 @@ export default function App() {
 
   const [page,        setPage]        = useState("home");
   const [docType,     setDocType]     = useState(null);
+  const [chosenType,  setChosenType]  = useState(null);   // the card picked on the portal; Claude doesn't override it
   const [formData,    setFormData]    = useState(() => {
     const saved = store.get("sg_generated_by");
     const threeMonths = new Date();
@@ -855,6 +876,7 @@ export default function App() {
         setLastDealId(d.lastDealId || null);
         setCustomPrompt(d.customPrompt || "");
         setCustomFiles(d.customFiles || []);
+        setChosenType(d.chosenType || null);
         if (d.page && d.page !== "home") setPage(d.page);
         setRestoredAt(d.savedAt || Date.now());
       }
@@ -868,14 +890,14 @@ export default function App() {
     const t = setTimeout(() => {
       saveDraft("main", {
         page: page === "design" ? "files" : page === "lead" || page === "review" ? "home" : page, docType, formData, aiKeys: [...aiKeys], pastedText, files, parsed, generated,
-        revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles,
+        revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles, chosenType,
       });
     }, 400);
     return () => clearTimeout(t);
-  }, [draftReady, page, docType, formData, aiKeys, pastedText, files, parsed, generated, revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles]);
+  }, [draftReady, page, docType, formData, aiKeys, pastedText, files, parsed, generated, revisions, lastConfig, lastFileContents, revisionHistory, lastDealId, customPrompt, customFiles, chosenType]);
 
   const resetWork = () => {
-    setDocType(null); setErrors({}); setPastedText(""); setFiles([]); setAiKeys(new Set());
+    setDocType(null); setChosenType(null); setErrors({}); setPastedText(""); setFiles([]); setAiKeys(new Set());
     setParsed(false); setParseErr(""); setGenErr(""); setGenerated(false); setRevisions("");
     setLastConfig(null); setLastFileContents([]); setRevisionHistory([]); setLastDealId(null);
     setCustomPrompt(""); setCustomFiles([]); setCustomErr(""); setRestoredAt(null);
@@ -901,11 +923,19 @@ export default function App() {
     </div>
   );
 
+  // A local test copy (localhost) never sends real emails: it logs what it would have sent
+  const isLocalCopy = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+  const guardLocal = () => {
+    if (isLocalCopy && window.emailjs && !window.emailjs.__guarded) {
+      window.emailjs.send = async (service, template, params) => { console.info('[local copy] email not sent:', template, params); return { status: 200, text: 'not sent (local copy)' }; };
+      window.emailjs.__guarded = true;
+    }
+  };
   const loadEmailJS = () => new Promise((res, rej) => {
-    if (window.emailjs) { res(); return; }
+    if (window.emailjs) { guardLocal(); res(); return; }
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js';
-    s.onload = () => { window.emailjs.init(EMAILJS_KEY); res(); };
+    s.onload = () => { window.emailjs.init(EMAILJS_KEY); guardLocal(); res(); };
     s.onerror = () => rej(new Error('Failed to load EmailJS'));
     document.head.appendChild(s);
   });
@@ -958,6 +988,7 @@ export default function App() {
     // Starting a new document replaces the saved one, so check first
     if (hasWork && !window.confirm(`You have work in progress (${workTitle}). Start a new document and clear it?\n\nChoose Cancel, then "Continue", to keep working on it.`)) return;
     resetWork();
+    setChosenType(type === 'custom' ? null : type);
     setPage(type === 'custom' ? "custom" : "intake");
   };
 
@@ -1044,7 +1075,8 @@ ${files.length ? "Files: " + files.map(f=>f.name).join(", ") : ""}
 
 CRITICAL: Return ONLY a flat JSON object. Every value must be a plain string or number. No nested objects, no arrays, no null. Use empty string for not found.
 
-Include "suggestedDocType" — one of: "assessment", "proposal", "project", "watersolve"
+${chosenType ? `The user is building a ${DOC_TYPES.find(d => d.id === chosenType)?.title || chosenType}. Extract fields for that document type. Set "suggestedDocType" to "${chosenType}".
+` : ""}Include "suggestedDocType" — one of: "assessment", "proposal", "project", "watersolve"
 - "watersolve" = WaterSolve work: dredging, dewatering, geotextile tubes, polymer conditioning, sludge/lagoon/pond cleanouts, or any document on WaterSolve letterhead
 - "project" = capital project, equipment installation, one-time CapEx
 - "proposal" = recurring O&M service contract, monthly fee
@@ -1076,23 +1108,11 @@ WATERSOLVE-ONLY FIELDS (fill only when suggestedDocType is "watersolve"; otherwi
 ${WS_PARSE_GUIDE}`;
 
       msgContent.push({ type:"text", text: prompt });
-      const raw = await callClaude(msgContent, 5000);
-
-      let extracted = {};
-      try {
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error("no json");
-        extracted = JSON.parse(jsonMatch[0]);
-      } catch(e) {
-        const cleaned = raw.replace(/```json|```/g,'').trim();
-        const m2 = cleaned.match(/\{[\s\S]*\}/);
-        if (m2) extracted = JSON.parse(m2[0]);
-        else throw new Error("Could not parse response — try again.");
-      }
+      const extracted = await askForJson(msgContent);
 
       setParseStep(2);
       const filled = new Set();
-      const merged = {};
+      const merged = { ...formData };   // keep defaults: close date (3 months out), your remembered name
       Object.entries(extracted).forEach(([k,v]) => {
         // Never overwrite generatedBy or pipeline from parsed doc content
         if (k === 'generatedBy' || k === 'pipeline' || k === 'suggestedDocType') return;
@@ -1102,7 +1122,8 @@ ${WS_PARSE_GUIDE}`;
         }
       });
 
-      const suggested = extracted.suggestedDocType || "project";
+      // The type picked on the portal wins; Claude's guess only fills in when none was picked
+      const suggested = chosenType || extracted.suggestedDocType || "project";
       const defaultPipeline = suggested === "watersolve" ? "WaterSolve" : suggested === "project" ? "Project" : suggested === "proposal" ? "Recurring" : "";
       merged.pipeline = merged.pipeline || defaultPipeline;
       if (suggested === "watersolve") {
@@ -1185,29 +1206,7 @@ ${WS_PARSE_GUIDE}`;
         }
       }
       content.push({ type:"text", text:buildParsePrompt(docType, pastedText, files.map(f=>f.name)) });
-      const raw = await callClaude(content, 5000);
-
-      // Robust JSON extraction — handles markdown fences, extra text, and minor formatting issues
-      let extracted = {};
-      try {
-        // First try: extract the outermost { } block
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error("no json block");
-        extracted = JSON.parse(jsonMatch[0]);
-      } catch(parseErr) {
-        // Second try: strip control characters and retry
-        try {
-          const cleaned = raw
-            .replace(/```json|```/g, '')
-            .replace(/[\x00-\x1F\x7F]/g, m => m === '\n' || m === '\r' || m === '\t' ? m : '')
-            .trim();
-          const jsonMatch2 = cleaned.match(/\{[\s\S]*\}/);
-          if (!jsonMatch2) throw new Error("No JSON found in response — try again.");
-          extracted = JSON.parse(jsonMatch2[0]);
-        } catch(e2) {
-          throw new Error("Could not parse response — try again or paste text manually.");
-        }
-      }
+      const extracted = await askForJson(content);
       setParseStep(2);
       const filled = new Set();
       const merged = {...formData};
@@ -1334,9 +1333,10 @@ ${WS_PARSE_GUIDE}`;
       // Filename: {Company} {3-word description} - {M.DD}, plus v2, v3... for revisions
       const now = new Date();
       const dateShort = `${now.getMonth()+1}.${String(now.getDate()).padStart(2,'0')}`;
-      const companyName = (formData.clientShortName || formData.clientLegalName || formData.clientName || "Client").trim();
+      const companyName = (formData.clientShortName || formData.clientLegalName || formData.clientName || "Client").replace(/[<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim() || "Client";
       const companyWords = new Set(companyName.toLowerCase().split(/\s+/));
-      const projectDesc = (formData.projectTitle || formData.serviceDescription || "")
+      // Only project-type documents have a project title; a parsed one can belong to another document
+      const projectDesc = (docType === "project" || docType === "watersolve" ? (formData.projectTitle || formData.serviceDescription || "") : (result.config?.proposal_title || result.config?.document_title || ""))
         .replace(/[-–—]/g, ' ')          // remove dashes/em dashes
         .replace(/[^a-zA-Z0-9\s]/g, '')  // remove special chars
         .split(/\s+/).filter(Boolean)
@@ -1358,7 +1358,7 @@ ${WS_PARSE_GUIDE}`;
             docType,
             clientName:           formData.clientLegalName || formData.clientName,
             clientShortName:      formData.clientShortName,
-            projectTitle:         formData.projectTitle,
+            projectTitle:         docType === "project" || docType === "watersolve" ? formData.projectTitle : "",
             pipeline:             formData.pipeline,
             dealAmount:           formData.dealAmount,
             closeDate:            formData.closeDate,
@@ -1387,6 +1387,8 @@ ${WS_PARSE_GUIDE}`;
         }).then(r => r.json()).then(data => {
           if (data?.dealId) {
             setLastDealId(data.dealId);
+            // Later versions link the same company directly instead of looking it up again
+            if (data.company?.id) setFormData(prev => ({ ...prev, hsCompanyId: String(data.company.id), hsCompanyName: data.company.name || prev.hsCompanyName, hsNewCompanyOk: false }));
             console.log(`✓ HubSpot deal ${data.isNew ? 'created' : 'updated'}: ${data.dealName} (${data.dealId})`);
             // Upload the .docx and attach it to the deal as a note
             blobToBase64(blob)
@@ -1609,7 +1611,7 @@ ${WS_PARSE_GUIDE}`;
       {/* ── INTAKE ── */}
       {page==="intake" && (
         <div className="intake-page">
-          <div className="intake-title">Let's get started</div>
+          <div className="intake-title">{chosenType ? DOC_TYPES.find(d => d.id === chosenType)?.title : "Let's get started"}</div>
           <div className="intake-sub">Upload your files and add any relevant context. Claude will read everything and pre-fill the proposal form for you.</div>
 
           <div className="intake-grid">

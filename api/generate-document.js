@@ -140,13 +140,16 @@ const brd = { top: cb, bottom: cb, left: cb, right: cb };
 const nb  = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 const noBorders = { top: nb, bottom: nb, left: nb, right: nb };
 const mg  = { top: 80, bottom: 80, left: 120, right: 120 };
+const toNum = n => typeof n === 'number' ? n : Number(String(n ?? '').replace(/[^0-9.\-]/g, ''));
 const fmt = (n, cfg) => {
   if (n == null || n === '') return '';
-  if (Number(n) === 0) return 'Included';
+  const v = toNum(n);
+  if (!isFinite(v) || String(n).replace(/[^0-9]/g, '') === '') return String(n);   // e.g. "TBD": show as written
+  if (v === 0) return 'Included';
   const sym = cfg?.currency_symbol || '$';
-  return sym + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return (v < 0 ? '-' : '') + sym + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
 };
-const annual = n => n != null ? n * 12 : null;
+const annual = n => { if (n == null || n === '') return null; const v = toNum(n); return isFinite(v) ? v * 12 : null; };
 
 function blueBar(text, size = 16) {
   return new Paragraph({
@@ -432,7 +435,7 @@ function buildAssessment(cfg) {
 
     // S4–S6 Systems
     ...systems.flatMap(sys => [
-      blueBar(`4. ${sys.name} — System Assessment`), ...spacer(1),
+      blueBar(`4. ${sys.name}: System Assessment`), ...spacer(1),
       body(sys.current_state || ''),
       ...spacer(1),
       ...(sys.findings?.length ? [new Paragraph({ spacing: sp(160, 60), children: [new TextRun({ text: 'Key Findings', bold: true, size: 24, color: BLUE, font: 'Calibri' })] }), ...sys.findings.map(bullet)] : []),
@@ -657,7 +660,7 @@ function callClaudeOnce(messages, maxTokens) {
       res.on('end', () => {
         let parsed;
         try { parsed = JSON.parse(data); }
-        catch (e) { return reject(Object.assign(new Error(`Claude returned an unreadable response (${res.statusCode}).`), { retry: res.statusCode >= 500 })); }
+        catch (e) { return reject(Object.assign(new Error(`Claude returned an unreadable response (${res.statusCode}).`), { retry: true })); }
         if (parsed.error) {
           // 529 overloaded, 429 rate limited and 5xx are temporary
           const retry = res.statusCode === 529 || res.statusCode === 429 || res.statusCode >= 500;
@@ -1139,7 +1142,8 @@ Return ONLY the document content — no preamble, no explanation.`
       .replace(/[-\u2013\u2014]/g, ' ')
       .replace(/[^a-zA-Z0-9\s]/g, '')
       .split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-    const filename = `${clientName}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}.docx`;
+    const safe = t => t.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const filename = `${safe(clientName) || 'Client'}${projectDesc ? ' ' + projectDesc : ''} - ${dateShort}.docx`;
 
     // JSON, not a binary download: the client needs the config to make later revisions,
     // and a large config does not fit in a response header.

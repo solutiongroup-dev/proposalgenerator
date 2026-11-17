@@ -69,7 +69,9 @@ async function pdfPageImages(pdf, budget) {
       c.width = Math.round(vp.width); c.height = Math.round(vp.height);
       const ctx = c.getContext("2d");
       ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
-      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      // "print" draws without the browser's animation timer, which stops while the tab is in the
+      // background: people switch tabs while a big scan is prepared, and it must keep going
+      await page.render({ canvasContext: ctx, viewport: vp, intent: "print" }).promise;
       const b = await canvasToJpeg(c, quality);
       blobs.push(b); total += b64Size(b.size);
       if (total > budget) break;

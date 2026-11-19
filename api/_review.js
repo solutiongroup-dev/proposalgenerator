@@ -7,8 +7,8 @@ const { hubspotRequest } = require('./_hubspot');
 const { pipelineStages } = require('./_crm');
 
 const PIPELINES = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073': 'WaterSolve', '2710441665': 'M&A' };
-const OWN_PIPELINES = ['2276783856', '2277462760', '2504421073'];   // each person sees the deals they own here
-const BD_PIPELINES = ['2710441665'];                                 // BD (M&A): the whole pipeline, for BD_ACCESS only
+const OWN_PIPELINES = ['2276783856', '2277462760', '2504421073'];   // sales pipelines: everyone can see them
+const BD_PIPELINES = ['2710441665'];                                 // BD (M&A): only the BD_ACCESS group
 const TAB = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073': 'WaterSolve', '2710441665': 'BD' };
 const BD_ACCESS = ['tbatterson@solutionmgt.com', 'jbrenan@solutionmgt.com', 'cpierce@solutionmgt.com', 'bkoepsel@solutionmgt.com'];
 const hasBdAccess = email => BD_ACCESS.includes(String(email || '').trim().toLowerCase());
@@ -52,7 +52,7 @@ function matchOwners(owners, who) {
 async function openDeals(ownerId, pipelines) {
   const deals = [];
   let after;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     const r = await hubspotRequest('POST', '/crm/v3/objects/deals/search', {
       filterGroups: [{ filters: [
         ...(ownerId ? [{ propertyName: 'hubspot_owner_id', operator: 'EQ', value: String(ownerId) }] : []),
@@ -94,26 +94,26 @@ async function readMany(type, ids, properties) {
 // The latest activity per deal (note, call, meeting or email), and the latest portal review
 async function activity(dealIds) {
   const kinds = [
-    { type: 'notes',    props: ['hs_timestamp', 'hs_note_body'], text: p => strip(p.hs_note_body), label: 'Note' },
-    { type: 'calls',    props: ['hs_timestamp', 'hs_call_title', 'hs_call_body'], text: p => [p.hs_call_title, strip(p.hs_call_body)].filter(Boolean).join(': '), label: 'Call' },
-    { type: 'meetings', props: ['hs_timestamp', 'hs_meeting_title', 'hs_meeting_body', 'hs_internal_meeting_notes'], text: p => [p.hs_meeting_title, strip(p.hs_internal_meeting_notes || p.hs_meeting_body)].filter(Boolean).join(': '), label: 'Meeting' },
-    { type: 'emails',   props: ['hs_timestamp', 'hs_email_subject', 'hs_email_text'], text: p => [p.hs_email_subject, String(p.hs_email_text || '').slice(0, 400)].filter(Boolean).join(': '), label: 'Email' },
+    { type: 'notes',    props: ['hs_timestamp', 'hs_note_body', 'hubspot_owner_id'], text: p => strip(p.hs_note_body), label: 'Note' },
+    { type: 'calls',    props: ['hs_timestamp', 'hs_call_title', 'hs_call_body', 'hubspot_owner_id'], text: p => [p.hs_call_title, strip(p.hs_call_body)].filter(Boolean).join(': '), label: 'Call' },
+    { type: 'meetings', props: ['hs_timestamp', 'hs_meeting_title', 'hs_meeting_body', 'hs_internal_meeting_notes', 'hubspot_owner_id'], text: p => [p.hs_meeting_title, strip(p.hs_internal_meeting_notes || p.hs_meeting_body)].filter(Boolean).join(': '), label: 'Meeting' },
+    { type: 'emails',   props: ['hs_timestamp', 'hs_email_subject', 'hs_email_text', 'hubspot_owner_id'], text: p => [p.hs_email_subject, String(p.hs_email_text || '').slice(0, 400)].filter(Boolean).join(': '), label: 'Email' },
   ];
   const latest = {}, reviewed = {};
   await Promise.all(kinds.map(async k => {
     const assoc = await associated(dealIds, k.type);
-    const objs = await readMany(k.type, Object.values(assoc).flat().slice(0, 1500), k.props);
+    const objs = await readMany(k.type, Object.values(assoc).flat().slice(0, 4000), k.props);
     for (const [dealId, ids] of Object.entries(assoc)) {
       for (const id of ids) {
         const p = objs[id]; if (!p) continue;
         const at = Date.parse(p.hs_timestamp || '') || 0;
         const text = k.text(p);
         if (k.type === 'notes' && text.startsWith(REVIEW_MARK)) {
-          if (!reviewed[dealId] || at > reviewed[dealId].at) reviewed[dealId] = { at, text };
+          if (!reviewed[dealId] || at > reviewed[dealId].at) reviewed[dealId] = { at, text, by: String(p.hubspot_owner_id || '') };
           continue;   // a review note isn't "activity" with the customer
         }
         if (text.startsWith('Generated document:')) continue;   // proposal uploads aren't activity either
-        if (!latest[dealId] || at > latest[dealId].at) latest[dealId] = { at, kind: k.label, text: text.slice(0, 600) };
+        if (!latest[dealId] || at > latest[dealId].at) latest[dealId] = { at, kind: k.label, text: text.slice(0, 600), by: String(p.hubspot_owner_id || '') };
       }
     }
   }));
@@ -152,13 +152,15 @@ function weekStart(now) {
   return ct.getTime() + offset;
 }
 
-// One person's review list: their own open deals, plus the whole BD (M&A) pipeline when bd is true
-async function ownerReview(ownerId, { bd = false } = {}) {
-  const [own, bdDeals, pipes] = await Promise.all([openDeals(ownerId, OWN_PIPELINES), bd ? openDeals(null, BD_PIPELINES) : [], pipelineStages()]);
-  const raw = [...own, ...bdDeals];
+// A review list. "My deals": the person's own open deals; "All deals" (all: true): every open deal.
+// The BD group (bd: true) also gets the BD / M&A pipeline and can edit every deal; everyone
+// else can edit only their own. owners (id → name) labels whose deal each one is.
+async function ownerReview(ownerId, { bd = false, all = false, owners = {} } = {}) {
+  const pipelines = bd ? [...OWN_PIPELINES, ...BD_PIPELINES] : OWN_PIPELINES;
+  const [raw, pipes] = await Promise.all([openDeals(all ? null : ownerId, pipelines), pipelineStages()]);
   const ids = raw.map(d => String(d.id));
   const [{ latest, reviewed }, contactAssoc] = await Promise.all([activity(ids), associated(ids, 'contacts')]);
-  const contacts = await readMany('contacts', Object.values(contactAssoc).flat().slice(0, 1500), ['email', 'firstname', 'lastname']);
+  const contacts = await readMany('contacts', Object.values(contactAssoc).flat().slice(0, 4000), ['email', 'firstname', 'lastname']);
   // The customer is the first linked contact who isn't one of our own people
   const isCustomer = c => c && !/@solutionmgt\.com$/i.test(c.email || '');
   const now = Date.now(), monday = weekStart(now);
@@ -169,6 +171,8 @@ async function ownerReview(ownerId, { bd = false } = {}) {
     const startup = dateOnly(p.estimated_startup_date), end = dateOnly(p.estimated_contract_end_date), close = dateOnly(p.closedate);
     const from = startup || close;
     const d = {
+      ownerId: String(p.hubspot_owner_id || ''), ownerName: owners[String(p.hubspot_owner_id || '')] || (p.hubspot_owner_id ? 'Another user' : 'No owner'),
+      canEdit: bd || String(p.hubspot_owner_id || '') === String(ownerId),
       id, name: p.dealname || '(no name)', pipelineId: p.pipeline, pipeline: PIPELINES[p.pipeline] || pipe.label, tab: TAB[p.pipeline] || 'Other',
       stageId: p.dealstage, stage: pipe.stages[p.dealstage]?.label || '',
       stages: Object.entries(pipe.stages).sort((a, b) => a[1].order - b[1].order).map(([sid, s]) => ({ id: sid, label: s.label })),
@@ -179,9 +183,13 @@ async function ownerReview(ownerId, { bd = false } = {}) {
       customer: c ? { id: cId, email: c.email || '', name: [c.firstname, c.lastname].filter(Boolean).join(' ') } : null,
       dealNotes: strip(p.deal_notes || '').slice(0, 600),
       lastActivity: latest[id] || null,
-      lastReview: reviewed[id] ? { at: reviewed[id].at } : null,
+      lastReview: reviewed[id] ? { at: reviewed[id].at, by: owners[reviewed[id].by] || '' } : null,
       modified: p.hs_lastmodifieddate || '',
     };
+    // The most recent update: a portal review or anything logged on the deal, and who did it
+    const rv = reviewed[id], l = latest[id];
+    const newest = rv && (!l || rv.at >= l.at) ? { at: rv.at, kind: "Deal review", by: rv.by } : l ? { at: l.at, kind: l.kind, by: l.by } : null;
+    d.lastUpdate = newest && newest.at ? { at: newest.at, kind: newest.kind, by: owners[newest.by] || '' } : null;
     const a = attention(d, now);
     d.reasons = a.reasons;
     // Checked off once a week: a review since Monday counts; after that the deal asks again

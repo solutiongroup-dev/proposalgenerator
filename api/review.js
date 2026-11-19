@@ -2,8 +2,10 @@
  * SG Portal — weekly deal review
  * POST /api/review { login: { email, password } }  → signs that person in (30-day personal cookie)
  * POST /api/review { logout: true }                → signs them out
- * GET  /api/review [?owner=<id>&t=<link token>]    → the signed-in person's deals (own deals in
- *      Recurring, Projects and WaterSolve; plus every BD / M&A deal for the BD group)
+ * GET  /api/review [?scope=all] [&owner=<id>&t=<link token>]
+ *      → "My deals" (the person's own open deals) or, with scope=all, every open deal in
+ *        Recurring, Projects and WaterSolve. The BD group also sees the BD / M&A pipeline
+ *        and can update any deal; everyone else can update only their own.
  * POST /api/review { dealId, noUpdates, context, changes, original [, owner, t] }
  *      → saves the edits to HubSpot and logs a review note on the deal
  *
@@ -69,7 +71,10 @@ module.exports = async function (req, res) {
       const owner = (await owners()).find(o => o.id === ownerId);
       if (!owner) { needLogin(res, 'That person was not found in HubSpot.'); return; }
       const bd = hasBdAccess(owner.email);
-      res.status(200).json({ owner: { id: owner.id, name: owner.name, email: owner.email }, bd, viaLink: !!(q.t && q.owner), deals: await ownerReview(ownerId, { bd }) });
+      const names = Object.fromEntries((await owners()).map(o => [o.id, o.name]));
+      const all = q.scope === 'all';
+      res.status(200).json({ owner: { id: owner.id, name: owner.name, email: owner.email }, bd, scope: all ? 'all' : 'mine', viaLink: !!(q.t && q.owner),
+        deals: await ownerReview(ownerId, { bd, all, owners: names }) });
       return;
     }
 
@@ -86,7 +91,8 @@ module.exports = async function (req, res) {
     const p = deal.properties || {};
     const isBd = BD_PIPELINES.includes(p.pipeline);
     if (!PIPELINES[p.pipeline]) { res.status(400).json({ error: 'This deal is not in a pipeline the review covers.' }); return; }
-    if (isBd ? !hasBdAccess(owner.email) : String(p.hubspot_owner_id) !== ownerId) {
+    // The BD group can update any deal; everyone else only the deals they own (never BD)
+    if (!hasBdAccess(owner.email) && (isBd || String(p.hubspot_owner_id) !== ownerId)) {
       res.status(403).json({ error: isBd ? 'Only the BD group can update BD deals.' : `This deal belongs to someone else in HubSpot, so ${owner.name} can't update it here.` });
       return;
     }

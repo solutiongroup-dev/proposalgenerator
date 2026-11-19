@@ -813,7 +813,9 @@ function WaterBar({ pct }) {
 
 export default function App() {
 
-  const [page,        setPage]        = useState("home");
+  // A ?review link opens straight to Review my deals
+  const startOnReview = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("review");
+  const [page,        setPage]        = useState(startOnReview ? "review" : "home");
   const [docType,     setDocType]     = useState(null);
   const [chosenType,  setChosenType]  = useState(null);   // the card picked on the portal; Claude doesn't override it
   const [formData,    setFormData]    = useState(() => {
@@ -885,7 +887,7 @@ export default function App() {
         setCustomPrompt(d.customPrompt || "");
         setCustomFiles(d.customFiles || []);
         setChosenType(d.chosenType || null);
-        if (d.page && d.page !== "home") setPage(d.page);
+        if (d.page && d.page !== "home" && !startOnReview) setPage(d.page);
         setRestoredAt(d.savedAt || Date.now());
       }
       setDraftReady(true);

@@ -31,8 +31,8 @@ class CrashGuard extends React.Component {
 // The personal link in the weekly review email (?review=<owner>&t=<token>) opens that
 // person's review page directly; the link itself is the permission, so no team sign-in.
 const params = new URLSearchParams(window.location.search);
-// ?review on its own opens the same page with the personal sign-in (no team password needed).
-const reviewLink = params.has('review') ? { owner: params.get('t') ? params.get('review') : '', token: params.get('t') || '' } : null;
+// ?review on its own opens the review page inside the portal, after the team sign-in.
+const reviewLink = params.get('review') && params.get('t') ? { owner: params.get('review'), token: params.get('t') } : null;
 
 function ReviewLinkShell({ owner, token }) {
   return (

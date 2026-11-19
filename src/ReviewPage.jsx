@@ -243,10 +243,13 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
   const [data, setData] = useState(null);          // "My deals"
   const [allData, setAllData] = useState(null);    // "All Deals", loaded the first time that tab is opened
   const [scope, setScope] = useState("mine");
-  const [needLogin, setNeedLogin] = useState(false);
-  const [email, setEmail] = useState(store.get("sg_review_email") || "");
-  const [password, setPassword] = useState("");
+  const [owner, setOwner] = useState(store.get("sg_review_owner") || "");   // whose deals (picked by name)
+  const [needWho, setNeedWho] = useState(false);
+  const [who, setWho] = useState(store.get("sg_review_who") || "");
+  const [matches, setMatches] = useState(null);
+  const [password, setPassword] = useState("");     // personal password: only to open BD
   const [signingIn, setSigningIn] = useState(false);
+  const [bdError, setBdError] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [doneMap, setDoneMap] = useState({});   // deal id -> "No updates" / "2 updates"
@@ -254,7 +257,7 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
   const [tab, setTab] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
-  // The personal link from the weekly email; dropped once they sign in with their password
+  // The personal link from the weekly email
   const [link, setLink] = useState(linkOwner && linkToken ? { owner: linkOwner, token: linkToken } : null);
 
   // Deals reviewed since Monday start checked off
@@ -269,43 +272,63 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
     const params = new URLSearchParams();
     if (which === "all") params.set("scope", "all");
     if (link) { params.set("owner", link.owner); params.set("t", link.token); }
+    else if (owner) params.set("owner", owner);
     const qs = params.toString() ? `?${params}` : "";
     fetch(`/api/review${qs}`)
       .then(r => r.json().then(d => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
-        if (d.needLogin) { setNeedLogin(true); setData(null); setAllData(null); if (link) setError(d.error); return; }
+        if (d.needWho) { setNeedWho(true); setData(null); setAllData(null); if (d.error) setError(d.error); return; }
         if (!ok) throw new Error(d.error || "Could not load the deals.");
-        setNeedLogin(false);
+        setNeedWho(false);
+        if (!link && d.owner?.id && d.owner.id !== owner) { setOwner(d.owner.id); store.set("sg_review_owner", d.owner.id); }
         checkOff(d.deals);
         if (which === "all") setAllData(d); else setData(d);
       })
       .catch(e => setError(e.message === "Failed to fetch" ? "Could not reach the server." : e.message))
       .finally(() => setLoading(false));
   };
-  useEffect(() => load("mine"), [link]);
+  useEffect(() => load("mine"), [link, owner]);
 
-  const signIn = async e => {
+  // Who are you? Name or work email → the matching HubSpot user
+  const find = async e => {
     e.preventDefault();
-    if (!email.trim() || !password.trim()) return;
-    setSigningIn(true); setError("");
+    if (!who.trim()) return;
+    setError(""); setMatches(null);
+    try {
+      const r = await fetch(`/api/review?who=${encodeURIComponent(who.trim())}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Could not look that up.");
+      store.set("sg_review_who", who.trim());
+      if (d.owners.length === 1) pick(d.owners[0].id);
+      else if (!d.owners.length) setError("No HubSpot user matches that name or email. Try your work email.");
+      else setMatches(d.owners);
+    } catch (err) { setError(err.message === "Failed to fetch" ? "Could not reach the server." : err.message); }
+  };
+  const pick = id => { setMatches(null); setNeedWho(false); setStarted(false); setDoneMap({}); setAllData(null); setScope("mine"); store.set("sg_review_owner", id); setOwner(id); };
+
+  const unlockBd = async e => {
+    e.preventDefault();
+    if (!password.trim() || !data) return;
+    setSigningIn(true); setBdError("");
     try {
       const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ login: { email: email.trim(), password: password.trim() } }) });
+        body: JSON.stringify({ login: { email: data.owner.email, password: password.trim() } }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || "Could not sign in.");
-      store.set("sg_review_email", email.trim());
-      setPassword(""); setNeedLogin(false); setScope("mine"); setStarted(false);
-      if (link) { window.history.replaceState(null, "", window.location.pathname + "?review"); setLink(null); }
-      else load("mine");
-    } catch (err) { setError(err.message === "Failed to fetch" ? "Could not reach the server." : err.message); }
+      if (!r.ok) throw new Error(d.error || "Could not unlock BD.");
+      setPassword("");
+      // reload both lists with BD included, staying on the BD tab
+      setAllData(null); load("mine"); if (scope === "all") load("all");
+    } catch (err) { setBdError(err.message === "Failed to fetch" ? "Could not reach the server." : err.message); }
     setSigningIn(false);
   };
-  const signOut = async e => {
+  const lockBd = () => fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ logout: true }) }).catch(() => {});
+  const notMe = async e => {
     e.preventDefault();
-    try { await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ logout: true }) }); } catch (err) {}
-    setData(null); setAllData(null); setDoneMap({}); setTab(""); setScope("mine"); setStarted(false); setNeedLogin(true);
+    await lockBd();
+    store.set("sg_review_owner", "");
+    setOwner(""); setData(null); setAllData(null); setDoneMap({}); setTab(""); setScope("mine"); setStarted(false); setNeedWho(true);
   };
-  const signedOut = msg => { setData(null); setAllData(null); setNeedLogin(true); setError(msg || "Please sign in again."); };
+  const signedOut = msg => { setData(prev => prev && ({ ...prev, bd: false })); setAllData(prev => prev && ({ ...prev, bd: false })); setTab("BD"); setBdError(msg || "Enter your personal password to open BD."); };
 
   const switchScope = sc => {
     if (sc === scope) return;
@@ -318,9 +341,11 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
   const owners = [...new Set(allDeals.map(d => d.ownerName))].sort();
   const deals = scope === "all" && ownerFilter ? allDeals.filter(d => d.ownerName === ownerFilter) : allDeals;
   // Pipeline tabs: Projects, Recurring, WaterSolve (if there are any) and BD (BD group only)
-  const tabs = TAB_ORDER.filter(t => t === "Projects" || t === "Recurring" || (t === "BD" ? data?.bd : allDeals.some(d => d.tab === t)))
+  const bdLocked = !!data?.bdEligible && !data?.bd;
+  const tabs = TAB_ORDER.filter(t => t === "Projects" || t === "Recurring" || (t === "BD" ? data?.bdEligible : allDeals.some(d => d.tab === t)))
     .map(t => { const list = deals.filter(d => d.tab === t); return { name: t, list, todo: list.filter(d => !d.closed && !doneMap[d.id]).length }; });
   const current = tabs.find(t => t.name === tab) || tabs[0];
+  const showLock = bdLocked && current?.name === "BD";
   // All Deals: grouped by stage, in pipeline order; clicking a stage in the overview shows just that stage
   const groups = scope === "all" ? stageGroups(current?.list || []) : [];
   const shown = scope === "all"
@@ -369,20 +394,26 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
       {onBack && <button className="form-back" onClick={onBack}>← Back to the portal</button>}
       <div className="form-title">Weekly deal review</div>
 
-      {needLogin ? (
+      {needWho ? (
         <>
-          <div className="form-subtitle">Sign in with your work email and your personal password.</div>
-          <form onSubmit={signIn} className="rv-card rv-login">
-            <input type="email" autoComplete="username" autoCapitalize="none" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@solutionmgt.com" autoFocus={!email} />
-            <input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Personal password" autoFocus={!!email} />
-            <button className="rv-btn primary" type="submit" disabled={signingIn}>{signingIn ? "Signing in…" : "Show my deals"}</button>
-            <div className="rv-sub">Don't have your password? Ask Chase.</div>
+          <div className="form-subtitle">Enter your name or work email to see your HubSpot deals.</div>
+          <form onSubmit={find} className="rv-card" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input value={who} onChange={e => setWho(e.target.value)} placeholder="Your name or email" autoFocus
+              style={{ flex: 1, minWidth: 200, fontSize: 16, padding: "10px 12px", border: "1px solid #cbd5e0", borderRadius: 8, fontFamily: "inherit" }} />
+            <button className="rv-btn primary" type="submit">Show my deals</button>
           </form>
+          {matches && (
+            <div className="rv-card">
+              <div className="rv-sub" style={{ marginBottom: 8 }}>Which one are you?</div>
+              {matches.map(m => <button key={m.id} className="rv-btn ghost" style={{ margin: "0 8px 8px 0" }} onClick={() => pick(m.id)}>{m.name}</button>)}
+            </div>
+          )}
         </>
       ) : (
         <div className="form-subtitle">
           {data ? <><strong>{data.owner.name}</strong> · {myDeals.length} open deal{myDeals.length === 1 ? "" : "s"} of your own · {myDeals.filter(d => !doneMap[d.id]).length} to review this week</> : "Loading your deals from HubSpot…"}
-          {data && !data.viaLink && <> · <a href="#" onClick={signOut}>Sign out</a></>}
+          {data && !data.viaLink && <> · <a href="#" onClick={notMe}>Not you?</a></>}
+          {data?.bd && <> · <a href="#" onClick={async e => { e.preventDefault(); await lockBd(); setAllData(null); setScope("mine"); setTab("Projects"); load("mine"); }}>Lock BD</a></>}
         </div>
       )}
 
@@ -394,14 +425,14 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
           <button role="tab" aria-selected={scope === "all"} className={scope === "all" ? "on" : ""} onClick={() => switchScope("all")}>All Deals</button>
         </div>
       )}
-      {loading && !view && !needLogin && <div className="rv-sub">Loading {scope === "all" ? "every open deal" : "your deals"} from HubSpot…</div>}
+      {loading && !view && !needWho && <div className="rv-sub">Loading {scope === "all" ? "every open deal" : "your deals"} from HubSpot…</div>}
 
       {view && (
         <div className="rv-tabs" role="tablist">
           {tabs.map(t => (
             <button key={t.name} role="tab" aria-selected={current?.name === t.name} className={"rv-tab" + (current?.name === t.name ? " on" : "")}
               onClick={() => { setTab(t.name); setOpenId(""); setStageFilter(""); }}>
-              {t.name === "BD" ? "BD (M&A)" : t.name} <span className="rv-count">{t.list.length}</span>
+              {t.name === "BD" ? "BD (M&A)" : t.name} {t.name === "BD" && bdLocked ? <span aria-label="locked">🔒</span> : <span className="rv-count">{t.list.length}</span>}
               {scope === "mine" && t.todo > 0 && <span className="rv-todo-dot">{t.todo} to do</span>}
             </button>
           ))}
@@ -418,7 +449,17 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
         </div>
       )}
 
-      {scope === "all" && allData && current?.list.length > 0 && (() => {
+      {showLock && (
+        <form onSubmit={unlockBd} className="rv-card rv-login">
+          <div className="rv-title">🔒 BD (M&amp;A) needs your personal password</div>
+          <div className="rv-sub">BD deals are open to Tim, John, Chris and Brian. Enter the personal password Chase sent you; it stays unlocked on this device for 30 days.</div>
+          <input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Personal password" autoFocus />
+          <button className="rv-btn primary" type="submit" disabled={signingIn || !password.trim()}>{signingIn ? "Checking…" : "Open BD"}</button>
+          {bdError && <div className="rv-msg bad">{bdError}</div>}
+        </form>
+      )}
+
+      {!showLock && scope === "all" && allData && current?.list.length > 0 && (() => {
         const max = Math.max(1, ...groups.map(g => g.deals.length));
         const open = current.list.filter(d => !d.closed);
         const total = open.reduce((a, d) => a + (Number(d.amount) || 0), 0);
@@ -442,7 +483,7 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
         );
       })()}
 
-      {view && !shown.length && <div className="rv-card">{scope === "all" ? `No open ${current?.name === "BD" ? "BD" : current?.name || ""} deals${ownerFilter ? ` for ${ownerFilter}` : ""}.` : current?.name === "BD" ? "You don't own any open BD deals. See All Deals for the whole pipeline." : `No open ${current?.name || ""} deals are assigned to ${data.owner.name} in HubSpot.`}</div>}
+      {view && !showLock && !shown.length && <div className="rv-card">{scope === "all" ? `No open ${current?.name === "BD" ? "BD" : current?.name || ""} deals${ownerFilter ? ` for ${ownerFilter}` : ""}.` : current?.name === "BD" ? "You don't own any open BD deals. See All Deals for the whole pipeline." : `No open ${current?.name || ""} deals are assigned to ${data.owner.name} in HubSpot.`}</div>}
       {reviewable.length > 0 && (
         <div className="rv-progress">
           <div className="rv-progress-top">
@@ -466,7 +507,7 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
           const g = groups.find(x => x.deals.includes(d));
           return g ? <div className="rv-group">{g.label} <span>{g.deals.length} deal{g.deals.length === 1 ? "" : "s"}{g.amount ? ` · ${usd(g.amount)}` : ""}</span></div> : null;
         })()}
-        <DealCard key={d.id} deal={d} index={i} owner={link?.owner || ""} token={link?.token || ""} onSignedOut={signedOut} showOwner={scope === "all"}
+        <DealCard key={d.id} deal={d} index={i} owner={link?.owner || owner} token={link?.token || ""} onSignedOut={signedOut} showOwner={scope === "all"}
           open={openId === d.id} done={doneMap[d.id] || ""} onOpen={() => openDeal(d.id)} onDone={markDone} />
       </React.Fragment>))}
     </div>

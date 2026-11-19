@@ -1,23 +1,25 @@
 /**
  * SG Portal — weekly deal review
- * POST /api/review { login: { email, password } }  → signs that person in (30-day personal cookie)
- * POST /api/review { logout: true }                → signs them out
- * GET  /api/review [?scope=all] [&owner=<id>&t=<link token>]
- *      → "My deals" (the person's own open deals) or, with scope=all, every open deal in
- *        Recurring, Projects and WaterSolve. The BD group also sees the BD / M&A pipeline
- *        and can update any deal; everyone else can update only their own.
- * POST /api/review { dealId, noUpdates, context, changes, original [, owner, t] }
+ * GET  /api/review?who=<name or email>            → matching HubSpot users (team sign-in)
+ * GET  /api/review?owner=<id>[&scope=all][&t=<link token>]
+ *      → "My deals" (that person's open deals) or, with scope=all, every deal in Recurring,
+ *        Projects and WaterSolve. With BD unlocked, the BD / M&A pipeline too.
+ * POST /api/review { login: { email, password } }  → unlocks BD for that person (30-day cookie)
+ * POST /api/review { logout: true }                → locks BD again
+ * POST /api/review { owner, t?, dealId, noUpdates, context, changes, original }
  *      → saves the edits to HubSpot and logs a review note on the deal
  *
- * Access: everyone signs in with their own password (see personalPassword in _auth.js), or
- * opens the personal link from the weekly email. Personal sign-in problems answer 403 with
- * needLogin, so the team sign-in screen isn't triggered.
+ * Access: the team sign-in (or the personal link from the weekly email) opens a person's
+ * deals, which they can update. Only BD (M&A) needs more: Tim, John, Chris and Brian unlock
+ * it with their personal password (see personalPassword in _auth.js), and once unlocked
+ * they can update any deal. Personal-password problems answer 403 (never 401, which would
+ * bring up the team sign-in screen).
  */
 
-const { ownerLinkValid, personalPasswordMatches, personCookie, personClearCookie, signedInPerson } = require('./_auth');
+const { isSignedIn, ownerLinkValid, personalPasswordMatches, personCookie, personClearCookie, signedInPerson } = require('./_auth');
 const { hubspotRequest } = require('./_hubspot');
 const { pipelineStages, findOrCreateContact, link } = require('./_crm');
-const { PIPELINES, BD_PIPELINES, hasBdAccess, REVIEW_MARK, DEAL_PROPS, listOwners, ownerReview, dateOnly } = require('./_review');
+const { PIPELINES, BD_PIPELINES, hasBdAccess, REVIEW_MARK, DEAL_PROPS, listOwners, matchOwners, ownerReview, dateOnly } = require('./_review');
 
 const DAY = 86400000;
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -32,17 +34,25 @@ async function owners() {
   return ownersCache.list;
 }
 
-// Who is asking: the personal link from the email (owner + t), else the personal sign-in cookie
+// Whose deals, and whether BD is unlocked. The personal link from the weekly email or the team
+// sign-in opens a person's deals; BD is unlocked only by that person's own password cookie.
 function whoIs(req, ownerId, token) {
-  if (ownerId && token && ownerLinkValid(String(ownerId), token)) return String(ownerId);
-  return signedInPerson(req);
+  const id = /^\d{1,20}$/.test(String(ownerId || '')) ? String(ownerId) : '';
+  const person = signedInPerson(req);
+  if (id && token) return ownerLinkValid(id, token) ? { id, unlocked: person === id } : { expired: true };
+  if (id && isSignedIn(req)) return { id, unlocked: person === id };
+  if (!id && person) return { id: person, unlocked: true };
+  return null;
 }
-const needLogin = (res, error = 'Sign in with your email and personal password.') => res.status(403).json({ error, needLogin: true });
+const needLogin = (res, error = 'Enter your personal password to open BD.') => res.status(403).json({ error, needLogin: true });
+const noAccess = (req, res, w) => w?.expired
+  ? res.status(403).json({ error: 'This review link has expired. Open the SG Portal and choose Review my deals.', linkExpired: true })
+  : isSignedIn(req) ? res.status(200).json({ needWho: true })
+  : res.status(401).json({ error: 'Please sign in again.' });
 
 module.exports = async function (req, res) {
   res.setHeader('Cache-Control', 'no-store');
   if (!process.env.HUBSPOT_API_KEY) { res.status(500).json({ error: 'HUBSPOT_API_KEY not configured.' }); return; }
-  if (!process.env.REVIEW_PASSWORD_SECRET) { res.status(500).json({ error: 'Personal passwords are not set up yet (REVIEW_PASSWORD_SECRET missing). Tell Chase.' }); return; }
   const q = req.query || {}, b = req.body || {};
 
   try {
@@ -52,7 +62,15 @@ module.exports = async function (req, res) {
       return;
     }
 
+    if (req.method === 'GET' && q.who !== undefined) {
+      if (!isSignedIn(req)) { res.status(401).json({ error: 'Please sign in again.' }); return; }
+      const list = matchOwners(await owners(), q.who).map(o => ({ id: o.id, name: o.name, email: o.email }));
+      res.status(200).json({ owners: list });
+      return;
+    }
+
     if (req.method === 'POST' && b.login) {
+      if (!process.env.REVIEW_PASSWORD_SECRET) { res.status(500).json({ error: 'Personal passwords are not set up yet (REVIEW_PASSWORD_SECRET missing). Tell Chase.' }); return; }
       const email = String(b.login.email || '').trim().toLowerCase();
       const owner = (await owners()).find(o => o.email === email);
       if (!owner || !personalPasswordMatches(email, String(b.login.password || ''))) {
@@ -60,20 +78,22 @@ module.exports = async function (req, res) {
         needLogin(res, "That email and password don't match. Use your work email and the personal password Chase sent you.");
         return;
       }
+      if (!hasBdAccess(email)) { needLogin(res, 'BD (M&A) is only open to Tim, John, Chris and Brian.'); return; }
       res.setHeader('Set-Cookie', personCookie(req, owner.id));
       res.status(200).json({ ok: true, owner: { id: owner.id, name: owner.name } });
       return;
     }
 
     if (req.method === 'GET') {
-      const ownerId = whoIs(req, q.owner, q.t);
-      if (!ownerId) { needLogin(res, q.t ? 'This review link has expired. Sign in with your email and personal password instead.' : undefined); return; }
+      const w = whoIs(req, q.owner, q.t);
+      if (!w || w.expired) { noAccess(req, res, w); return; }
+      const ownerId = w.id;
       const owner = (await owners()).find(o => o.id === ownerId);
-      if (!owner) { needLogin(res, 'That person was not found in HubSpot.'); return; }
-      const bd = hasBdAccess(owner.email);
+      if (!owner) { res.status(404).json({ error: 'That person was not found in HubSpot.', needWho: true }); return; }
+      const bdEligible = hasBdAccess(owner.email), bd = bdEligible && w.unlocked;
       const names = Object.fromEntries((await owners()).map(o => [o.id, o.name]));
       const all = q.scope === 'all';
-      res.status(200).json({ owner: { id: owner.id, name: owner.name, email: owner.email }, bd, scope: all ? 'all' : 'mine', viaLink: !!(q.t && q.owner),
+      res.status(200).json({ owner: { id: owner.id, name: owner.name, email: owner.email }, bd, bdEligible, scope: all ? 'all' : 'mine', viaLink: !!(q.t && q.owner),
         deals: await ownerReview(ownerId, { bd, all, owners: names }) });
       return;
     }
@@ -82,17 +102,20 @@ module.exports = async function (req, res) {
 
     const dealId = String(b.dealId || '');
     if (!/^\d{1,20}$/.test(dealId)) { res.status(400).json({ error: 'Missing deal.' }); return; }
-    const ownerId = whoIs(req, b.owner, b.t);
-    if (!ownerId) { needLogin(res, 'Please sign in again, or open the latest link from your weekly email.'); return; }
+    const w = whoIs(req, b.owner, b.t);
+    if (!w || w.expired) { noAccess(req, res, w); return; }
+    const ownerId = w.id;
     const owner = (await owners()).find(o => o.id === ownerId);
-    if (!owner) { needLogin(res, 'That person was not found in HubSpot.'); return; }
+    if (!owner) { res.status(404).json({ error: 'That person was not found in HubSpot.' }); return; }
+    const bdUnlocked = w.unlocked && hasBdAccess(owner.email);
 
     const deal = await hubspotRequest('GET', `/crm/v3/objects/deals/${dealId}?properties=${DEAL_PROPS.join(',')}&associations=contacts`);
     const p = deal.properties || {};
     const isBd = BD_PIPELINES.includes(p.pipeline);
     if (!PIPELINES[p.pipeline]) { res.status(400).json({ error: 'This deal is not in a pipeline the review covers.' }); return; }
-    // The BD group can update any deal; everyone else only the deals they own (never BD)
-    if (!hasBdAccess(owner.email) && (isBd || String(p.hubspot_owner_id) !== ownerId)) {
+    // With BD unlocked, the BD group can update any deal; otherwise only your own (never BD)
+    if (!bdUnlocked && (isBd || String(p.hubspot_owner_id) !== ownerId)) {
+      if (isBd && hasBdAccess(owner.email)) { needLogin(res); return; }
       res.status(403).json({ error: isBd ? 'Only the BD group can update BD deals.' : `This deal belongs to someone else in HubSpot, so ${owner.name} can't update it here.` });
       return;
     }

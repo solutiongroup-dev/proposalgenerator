@@ -13,7 +13,7 @@
 
 const https = require('https');
 const { isSignedIn, ownerLinkToken } = require('./_auth');
-const { listOwners, ownerReview } = require('./_review');
+const { listOwners, ownerReview, hasBdAccess, bdPipelineSummary } = require('./_review');
 
 const PORTAL = process.env.PORTAL_URL || 'https://proposalgenerator-ten.vercel.app';
 const EMAILJS = {
@@ -26,7 +26,7 @@ const LIST_MAX = 10;
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const money = n => n == null ? '' : '$' + Math.round(n).toLocaleString('en-US');
 
-function buildEmail(owner, deals) {
+function buildEmail(owner, deals, bd = null) {
   const todo = deals.filter(d => !d.reviewedRecently);
   const shown = todo.slice(0, LIST_MAX);
   const link = `${PORTAL}/?review=${owner.id}&t=${encodeURIComponent(ownerLinkToken(owner.id))}`;
@@ -43,11 +43,15 @@ function buildEmail(owner, deals) {
     <p>Here are your open deals that need a quick check this week. For each one, confirm nothing has changed, or update the details and add any context. It takes about a minute per deal.</p>
     <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px">${rows}</table>
     ${todo.length > shown.length ? `<p style="font-size:13px;color:#5a6a80">Plus ${todo.length - shown.length} more on the review page.</p>` : ''}
+    ${bd && bd.total ? `<p style="margin:22px 0 6px;font-weight:600;color:#1a2332">BD (M&amp;A) pipeline: ${bd.total} open deal${bd.total === 1 ? '' : 's'}</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;color:#4a5568">${bd.stages.map(s => `<tr><td style="padding:2px 16px 2px 0">${esc(s.label)}</td><td style="padding:2px 0;font-weight:600;color:#1a2332">${s.count}</td></tr>`).join('')}</table>
+    <p style="font-size:12px;color:#9aa5b4;margin-top:6px">Open the BD tab on the review page with your personal password.</p>` : ''}
     <p style="margin:22px 0"><a href="${link}" style="background:#2B579A;color:#ffffff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600">Review my deals</a></p>
-    <p style="font-size:12px;color:#9aa5b4">This link opens your deals only and works for 14 days.</p>`;
+    <p style="font-size:12px;color:#9aa5b4">This link opens your deals and works for 14 days.</p>`;
   const text = `Hi ${first},\n\nYour open deals that need a check this week:\n\n` +
     shown.map(d => `- ${d.name} (${d.pipeline} · ${d.stage})${d.reasons.length ? `: ${d.reasons.join(', ')}` : ''}`).join('\n') +
-    (todo.length > shown.length ? `\n…plus ${todo.length - shown.length} more.` : '') + `\n\nReview them here: ${link}\n`;
+    (todo.length > shown.length ? `\n…plus ${todo.length - shown.length} more.` : '') +
+    (bd && bd.total ? `\n\nBD (M&A) pipeline: ${bd.total} open (${bd.stages.map(s => `${s.label} ${s.count}`).join(', ')})` : '') + `\n\nReview them here: ${link}\n`;
   return {
     to_name: owner.name, to_first_name: first, to_email: owner.email,
     todo_count: String(todo.length), deal_count: String(deals.length),
@@ -86,7 +90,8 @@ module.exports = async function (req, res) {
     if (one && !fromCron) {
       const owner = owners.find(o => o.id === String(one));
       if (!owner) { res.status(404).json({ error: 'Owner not found.' }); return; }
-      const email = buildEmail(owner, await ownerReview(owner.id));
+      const bdOk = hasBdAccess(owner.email);
+      const email = buildEmail(owner, await ownerReview(owner.id, { bd: bdOk }), bdOk ? await bdPipelineSummary() : null);
       if (q.preview) { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.status(200).send(`<h3>${esc(email.subject)}</h3><p>To: ${esc(email.to_email)}</p><hr>${email.deals_html}`); return; }
       const to = String(q.to || '').trim().toLowerCase();
       if (!/^[^\s@]+@solutionmgt\.com$/.test(to)) { res.status(400).json({ error: 'Test emails go only to a solutionmgt.com address (add &to=you@solutionmgt.com).' }); return; }
@@ -100,11 +105,15 @@ module.exports = async function (req, res) {
     if (!ready) { console.warn('Weekly review: email not set up, skipping'); res.status(200).json({ skipped: 'Email sending not set up' }); return; }
 
     const results = [];
+    let bdSummary = null;
     for (const owner of owners) {
       if (!owner.email) continue;
       try {
-        const deals = await ownerReview(owner.id);
-        const email = buildEmail(owner, deals);
+        // The BD group's own M&A deals are part of their list, and they get the BD pipeline summary
+        const bdOk = hasBdAccess(owner.email);
+        if (bdOk && !bdSummary) bdSummary = await bdPipelineSummary();
+        const deals = await ownerReview(owner.id, { bd: bdOk });
+        const email = buildEmail(owner, deals, bdOk ? bdSummary : null);
         if (!deals.length || email.todo_count === '0') { results.push({ owner: owner.name, skipped: deals.length ? 'all reviewed' : 'no open deals' }); continue; }
         await sendEmailJS(email);
         results.push({ owner: owner.name, sent: email.todo_count });

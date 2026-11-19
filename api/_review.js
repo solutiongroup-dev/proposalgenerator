@@ -205,4 +205,17 @@ async function ownerReview(ownerId, { bd = false, all = false, owners = {} } = {
   return deals;
 }
 
-module.exports = { PIPELINES, BD_PIPELINES, hasBdAccess, REVIEW_MARK, DEAL_PROPS, listOwners, matchOwners, ownerReview, dateOnly, strip };
+// Open BD (M&A) deals per stage, for the Monday email
+async function bdPipelineSummary() {
+  const [deals, pipes] = await Promise.all([openDeals(null, BD_PIPELINES), pipelineStages()]);
+  const stages = {};
+  for (const d of deals) {
+    const p = d.properties || {}, st = pipes[p.pipeline]?.stages[p.dealstage];
+    const key = st?.label || 'Other';
+    stages[key] = stages[key] || { label: key, order: st?.order ?? 99, count: 0 };
+    stages[key].count++;
+  }
+  return { total: deals.length, stages: Object.values(stages).sort((a, b) => a.order - b.order) };
+}
+
+module.exports = { PIPELINES, BD_PIPELINES, hasBdAccess, bdPipelineSummary, REVIEW_MARK, DEAL_PROPS, listOwners, matchOwners, ownerReview, dateOnly, strip };

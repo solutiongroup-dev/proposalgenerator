@@ -2,10 +2,11 @@ import { useState } from "react";
 import { store } from "./draft.js";
 
 // ── Feedback ──────────────────────────────────────────────────────────────────
-// A header button on every page. People say what they were doing, how it went and
-// what would work better; the page they were on, the document type and any error on
-// screen are attached automatically so a report like "it broke" can be acted on.
-// Sent to /api/feedback (kept in the site logs) and emailed to Chase via EmailJS.
+// A header button and a small "Provide input/feedback on this tool" button on every page.
+// People say what they were doing, how it went and what would work better; the page they
+// were on, the document type and any error on screen are attached automatically so a
+// report like "it broke" can be acted on. /api/feedback delivers it to Chase (a HubSpot
+// task assigned to him, plus an email once the template is set) and keeps it in the logs.
 
 const AREAS = ["Generating a proposal or assessment", "Custom file creation", "Entering a sales lead", "Reviewing my deals", "Signing in", "Something else"];
 const AREA_FOR_PAGE = { intake: 0, sections: 0, form: 0, generate: 0, custom: 1, design: 1, files: 1, lead: 2, review: 3 };
@@ -28,10 +29,13 @@ const css = `
   .fb-send { background: #2B579A; color: white; border: none; border-radius: 8px; padding: 12px; font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer; }
   .fb-send:disabled { opacity: 0.55; cursor: default; }
   .fb-note { font-size: 12px; color: #7a8a9a; line-height: 1.5; }
+  .fb-inline-wrap { display: flex; justify-content: center; padding: 18px 16px 22px; }
+  .fb-inline { background: white; border: 1px solid #cbd5e0; color: #2B579A; border-radius: 20px; padding: 7px 16px; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; }
+  .fb-inline:hover { border-color: #2B579A; background: #eef3fb; }
   .fb-err { font-size: 13px; color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 8px; padding: 8px 11px; }
 `;
 
-export default function Feedback({ page, docType, context, email }) {
+export default function Feedback({ page, docType, context, variant = "header", link = null }) {
   const [open, setOpen] = useState(false);
   const [area, setArea] = useState("");
   const [rating, setRating] = useState("");
@@ -40,6 +44,7 @@ export default function Feedback({ page, docType, context, email }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [delivered, setDelivered] = useState(true);
 
   const show = () => {
     setArea(AREAS[AREA_FOR_PAGE[page] ?? 5]);
@@ -58,18 +63,12 @@ export default function Feedback({ page, docType, context, email }) {
       at: new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }),
     };
     try {
-      // 1. Always kept in the site logs, even before the email template exists
-      const r = await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report) });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Could not send (${r.status}).`);
-      // 2. Emailed to Chase once the EmailJS template is set
-      if (email?.template) {
-        await email.load();
-        await window.emailjs.send(email.service, email.template, {
-          from_name: report.name, area: report.area, rating: report.rating, message: report.message,
-          page: report.page, doc_type: report.docType || "None", context: report.context || "None",
-          error_on_screen: report.errorOnScreen || "None", browser: `${report.browser} (${report.screen})`, submitted_at: report.at,
-        });
-      }
+      // The server sends it on to Chase (and keeps a copy in the site logs)
+      const r = await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...report, ...(link ? { owner: link.owner, t: link.token } : {}) }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Could not send (${r.status}).`);
+      setDelivered((d.delivered || []).length > 0);
       if (name.trim()) store.set("sg_generated_by", name.trim());
       setSent(true);
     } catch (e) {
@@ -80,14 +79,16 @@ export default function Feedback({ page, docType, context, email }) {
 
   return (<>
     <style>{css}</style>
-    <button className="help-btn" onClick={show} title="Tell us what would make this work better">💬 Feedback</button>
+    {variant === "inline"
+      ? <div className="fb-inline-wrap"><button className="fb-inline" onClick={show}>💬 Provide input/feedback on this tool</button></div>
+      : <button className="help-btn" onClick={show} title="Tell us what would make this work better">💬 Feedback</button>}
     {open && (
       <div className="fb-overlay" onClick={e => { if (e.target === e.currentTarget) setOpen(false); }}>
         <div className="fb-modal" role="dialog" aria-label="Send feedback">
           <div className="fb-head"><h2>{sent ? "Thank you" : "Help us make this better"}</h2><button onClick={() => setOpen(false)} aria-label="Close">×</button></div>
           {sent ? (
             <div className="fb-body">
-              <p style={{ fontSize: 15, color: "#4a5568", lineHeight: 1.6, margin: 0 }}>Your feedback went to Chase. If something is broken, it will be looked at right away.</p>
+              <p style={{ fontSize: 15, color: "#4a5568", lineHeight: 1.6, margin: 0 }}>{delivered ? "Your feedback went to Chase. If something is broken, it will be looked at right away." : "Your feedback was saved for Chase to read. If something is urgent, message him directly too."}</p>
               <button className="fb-send" onClick={() => setOpen(false)}>Close</button>
             </div>
           ) : (

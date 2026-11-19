@@ -476,7 +476,6 @@ const EMAILJS_SERVICE  = 'service_71nz8kc';
 const EMAILJS_TEMPLATE = 'template_ex35j5g';
 const EMAILJS_KEY      = 'uITaQIb_MQzLk8dQ7';
 const EMAILJS_DESIGN_TEMPLATE = 'template_22103rc'; // EmailJS template that emails design requests to Chase
-const EMAILJS_FEEDBACK_TEMPLATE = ''; // EmailJS template for app feedback (set once created; until then feedback goes to the site logs)
 const EMAIL_DELAY_MS   = 0; // Send immediately after generation
 const PARSE_STEPS = ["Reading uploaded files","Extracting data with Claude","Populating form fields"];
 const GEN_STEPS   = ["Extracting file content","Sending to server","Building branded document","Preparing download"];
@@ -1521,8 +1520,7 @@ ${WS_PARSE_GUIDE}`;
         <div className="header-right">
           <span>solutionmgt.com</span>
           <button className="help-btn" onClick={()=>setShowHelp(true)}>? Need help</button>
-          <Feedback page={page} docType={docType} context={formData.clientLegalName || formData.clientName || ""}
-            email={{ service: EMAILJS_SERVICE, template: EMAILJS_FEEDBACK_TEMPLATE, load: loadEmailJS }} />
+          <Feedback page={page} docType={docType} context={formData.clientLegalName || formData.clientName || ""} />
           <button className="help-btn" onClick={signOut} title="Sign out of the SG Portal">Sign out</button>
         </div>
       </header>
@@ -2154,6 +2152,7 @@ ${WS_PARSE_GUIDE}`;
         </div>
       )}
 
+      <Feedback variant="inline" page={page} docType={docType} context={formData.clientLegalName || formData.clientName || ""} />
       <footer className="app-footer">
         <span>6239 S. East Street, Suite F, Indianapolis, IN 46227 · (800) 465-8200 · solutionmgt.com</span>
         <span>© {new Date().getFullYear()} Environmental Management Solutions, Inc. d/b/a Solution Group</span>

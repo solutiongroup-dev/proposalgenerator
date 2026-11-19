@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import LoginGate from './Login.jsx'
 import ReviewPage from './ReviewPage.jsx'
+import Feedback from './Feedback.jsx'
 import SG_LOGO from './sg_logo.png'
 
 // If the app ever crashes while rendering, show a way back instead of a blank page.
@@ -42,6 +43,7 @@ function ReviewLinkShell({ owner, token }) {
         <div style={{ color: 'white', fontWeight: 600, fontFamily: "'DM Sans', sans-serif" }}>SG Portal</div>
       </div>
       <ReviewPage linkOwner={owner} linkToken={token} />
+      <Feedback variant="inline" page="review" link={{ owner, token }} />
     </div>
   );
 }

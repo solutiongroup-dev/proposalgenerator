@@ -1,1 +1,1 @@
-{"functions":{"api/*.js":{"memory":1024,"maxDuration":300,"includeFiles":"api/*.{png,jpg}"}},"crons":[{"path":"/api/weekly-review","schedule":"0 13 * * 1"}]}
+{"functions":{"api/*.js":{"memory":1024,"maxDuration":300,"includeFiles":"api/*.{png,jpg}"}},"crons":[{"path":"/api/weekly-review","schedule":"0 13 * * 1"},{"path":"/api/pipeline-report","schedule":"10 13 * * 1"}]}

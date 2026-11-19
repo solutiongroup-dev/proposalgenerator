@@ -79,6 +79,10 @@ const css = `
   .rv-scope button.on { background: white; color: ${BLUE}; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
   .rv-filter { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px; font-size: 13px; color: #4a5568; }
   .rv-filter select { font-size: 14px; font-family: inherit; border: 1px solid #cbd5e0; border-radius: 6px; padding: 6px 8px; background: white; }
+  .rv-owner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; color: #4a5568; margin-top: 12px; }
+  .rv-owner select { font-size: 15px; padding: 7px 10px; border: 1px solid #cbd5e0; border-radius: 8px; font-family: inherit; max-width: 100%; }
+  .rv-link { background: none; border: none; color: ${BLUE}; font-weight: 600; font-size: 13px; font-family: inherit; cursor: pointer; padding: 2px 0; text-decoration: underline; }
+  .rv-btn.small { padding: 7px 14px; font-size: 13px; }
   .rv-viewonly { font-size: 12px; color: #4a5568; background: #edf2f7; border-radius: 8px; padding: 8px 12px; margin-top: 12px; }
   .rv-board { background: white; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
   .rv-board-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 13px; color: #7a8a9a; margin-bottom: 8px; }
@@ -131,7 +135,45 @@ function stageGroups(list) {
 }
 const fmtDate = ts => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSignedOut, showOwner }) {
+// Change owner: pick a HubSpot user from the list
+function OwnerLine({ deal, owner, token, people, canEdit, onSignedOut, onOwnerChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const save = async () => {
+    if (!pick) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner, t: token, dealId: deal.id, newOwnerId: pick }) });
+      const d = await r.json().catch(() => ({}));
+      if (d.needLogin) { onSignedOut(d.error); return; }
+      if (!r.ok) throw new Error(d.error || `Could not change the owner (${r.status}).`);
+      setEditing(false); setPick("");
+      setMsg({ text: `Owner changed to ${d.ownerName}. HubSpot is updated and the change is noted on the deal.` });
+      onOwnerChanged(deal.id, d.ownerId, d.ownerName);
+    } catch (e) { setMsg({ bad: true, text: e.message === "Failed to fetch" ? "Could not reach the server." : e.message }); }
+    setBusy(false);
+  };
+  return (
+    <div className="rv-owner">
+      <span>Owner: <b>{deal.ownerName}</b></span>
+      {canEdit && !editing && people?.length > 0 && <button className="rv-link" onClick={() => setEditing(true)}>Change owner</button>}
+      {editing && <>
+        <select value={pick} onChange={e => setPick(e.target.value)} autoFocus>
+          <option value="">Choose the new owner…</option>
+          {people.filter(p => p.id !== deal.ownerId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <button className="rv-btn primary small" disabled={!pick || busy} onClick={save}>{busy ? "Saving…" : "Save owner"}</button>
+        <button className="rv-link" onClick={() => { setEditing(false); setPick(""); }}>Cancel</button>
+      </>}
+      {msg && <div className={"rv-msg " + (msg.bad ? "bad" : "good")} style={{ width: "100%" }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSignedOut, showOwner, people, onOwnerChanged }) {
   const canEdit = deal.canEdit !== false;
   const original = valuesOf(deal);
   const [v, setV] = useState(original);
@@ -203,6 +245,7 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSig
             : <b>No notes, calls, meetings or emails logged on this deal yet.</b>}
           {deal.dealNotes ? <>{"\n\n"}<b>Deal notes:</b> {deal.dealNotes}</> : null}
         </div>
+        <OwnerLine deal={deal} owner={owner} token={token} people={people} canEdit={canEdit} onSignedOut={onSignedOut} onOwnerChanged={onOwnerChanged} />
         {!canEdit && <div className="rv-viewonly">View only. This is {deal.ownerName}'s deal, so only they (or the BD group) can update it.</div>}
         <fieldset disabled={!canEdit} style={{ border: "none", padding: 0, margin: 0, minWidth: 0 }}>
         <div className="rv-grid">
@@ -288,6 +331,14 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
       .finally(() => setLoading(false));
   };
   useEffect(() => load("mine"), [link, owner]);
+
+  // A deal given to someone else: update it in All Deals; it stays in My deals (marked) until the next reload
+  const ownerChanged = (dealId, ownerId, ownerName) => {
+    const me = link?.owner || owner;
+    const upd = prev => prev && ({ ...prev, deals: prev.deals.map(d => d.id !== dealId ? d
+      : { ...d, ownerId, ownerName, canEdit: !!prev.bd || ownerId === me }) });
+    setData(upd); setAllData(upd);
+  };
 
   // Who are you? Name or work email → the matching HubSpot user
   const find = async e => {
@@ -508,7 +559,8 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
           return g ? <div className="rv-group">{g.label} <span>{g.deals.length} deal{g.deals.length === 1 ? "" : "s"}{g.amount ? ` · ${usd(g.amount)}` : ""}</span></div> : null;
         })()}
         <DealCard key={d.id} deal={d} index={i} owner={link?.owner || owner} token={link?.token || ""} onSignedOut={signedOut} showOwner={scope === "all"}
-          open={openId === d.id} done={doneMap[d.id] || ""} onOpen={() => openDeal(d.id)} onDone={markDone} />
+          open={openId === d.id} done={doneMap[d.id] || ""} onOpen={() => openDeal(d.id)} onDone={markDone}
+          people={data?.people || allData?.people} onOwnerChanged={ownerChanged} />
       </React.Fragment>))}
     </div>
   );

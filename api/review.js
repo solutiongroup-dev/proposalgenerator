@@ -8,6 +8,8 @@
  * POST /api/review { logout: true }                → locks BD again
  * POST /api/review { owner, t?, dealId, noUpdates, context, changes, original }
  *      → saves the edits to HubSpot and logs a review note on the deal
+ * POST /api/review { owner, t?, dealId, newOwnerId }
+ *      → gives the deal to another HubSpot user (picked from the list) and logs it on the deal
  *
  * Access: the team sign-in (or the personal link from the weekly email) opens a person's
  * deals, which they can update. Only BD (M&A) needs more: Tim, John, Chris and Brian unlock
@@ -93,8 +95,10 @@ module.exports = async function (req, res) {
       const bdEligible = hasBdAccess(owner.email), bd = bdEligible && w.unlocked;
       const names = Object.fromEntries((await owners()).map(o => [o.id, o.name]));
       const all = q.scope === 'all';
+      // Everyone a deal can be given to: HubSpot users only, by name
+      const people = (await owners()).filter(o => o.name && !o.name.includes('@')).map(o => ({ id: o.id, name: o.name })).sort((a, b) => a.name.localeCompare(b.name));
       res.status(200).json({ owner: { id: owner.id, name: owner.name, email: owner.email }, bd, bdEligible, scope: all ? 'all' : 'mine', viaLink: !!(q.t && q.owner),
-        deals: await ownerReview(ownerId, { bd, all, owners: names }) });
+        people, deals: await ownerReview(ownerId, { bd, all, owners: names }) });
       return;
     }
 
@@ -117,6 +121,25 @@ module.exports = async function (req, res) {
     if (!bdUnlocked && (isBd || String(p.hubspot_owner_id) !== ownerId)) {
       if (isBd && hasBdAccess(owner.email)) { needLogin(res); return; }
       res.status(403).json({ error: isBd ? 'Only the BD group can update BD deals.' : `This deal belongs to someone else in HubSpot, so ${owner.name} can't update it here.` });
+      return;
+    }
+
+    // Change owner: only to a HubSpot user, chosen from the list
+    if (b.newOwnerId !== undefined) {
+      const to = (await owners()).find(o => o.id === String(b.newOwnerId));
+      if (!to) { res.status(400).json({ error: 'Pick the new owner from the list of HubSpot users.' }); return; }
+      const fromId = String(p.hubspot_owner_id || '');
+      if (to.id === fromId) { res.status(400).json({ error: `${to.name} already owns this deal.` }); return; }
+      const from = (await owners()).find(o => o.id === fromId);
+      await hubspotRequest('PATCH', `/crm/v3/objects/deals/${dealId}`, { properties: { hubspot_owner_id: to.id } });
+      const when = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' });
+      await hubspotRequest('POST', '/crm/v3/objects/notes', {
+        properties: { hs_timestamp: new Date().toISOString(), hubspot_owner_id: ownerId,
+          hs_note_body: `<strong>SG Portal owner change</strong> by ${esc(owner.name)} on ${when}<br><br>Deal owner: ${esc(from?.name || '(none)')} → ${esc(to.name)}` },
+        associations: [{ to: { id: dealId }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 214 }] }],
+      });
+      console.log(`Deal owner changed: ${dealId} ${fromId} → ${to.id} by ${owner.name}`);
+      res.status(200).json({ ok: true, ownerId: to.id, ownerName: to.name });
       return;
     }
 

@@ -461,13 +461,13 @@ const DOC_TYPES = [
   { id:"project",    icon:"🏗️", title:"Project Proposal",   desc:"Full capital project proposal: scope, architecture, schedule, itemized pricing, and signature block.", badge:"CapEx Project", badgeClass:"badge-proj" },
   { id:"watersolve", icon:"💧", title:"WaterSolve Proposal", desc:"WaterSolve dredging, dewatering and geotextile tube proposal or sales quote, in WaterSolve format.", badge:"WaterSolve", badgeClass:"badge-proj" },
   { id:"custom",     icon:"✏️", title:"Custom Document",    desc:"Freeform — describe exactly what you need. No predefined structure or required fields.", badge:"Freeform", badgeClass:"badge-o" },
-  { id:"design",     icon:"🎨", title:"Custom Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to Chase.", badge:"To Chase", badgeClass:"badge-o" },
+  { id:"design",     icon:"🎨", title:"Custom Request",     desc:"Complex documents with photos, custom layout or design work. Fill in a brief and it goes straight to the design team.", badge:"Design team", badgeClass:"badge-o" },
 ];
 
 // The portal's three starting points
 const PORTAL = [
   { id:"generate", icon:"📄", title:"Generate a proposal", desc:"Assessments, Recurring and Project proposals, and WaterSolve quotes, written by Claude from your notes and files." },
-  { id:"files",    icon:"🎨", title:"Custom file creation", desc:"Freeform documents, or files with photos and design work sent to Chase." },
+  { id:"files",    icon:"🎨", title:"Custom file creation", desc:"Freeform documents, or files with photos and design work, built for you." },
   { id:"lead",     icon:"🤝", title:"Enter a sales lead",   desc:"Log a new opportunity. It goes straight into HubSpot at the Prequalification stage." },
   { id:"review",   icon:"✅", title:"Review my deals",      desc:"Confirm or update your open HubSpot deals: dates, amount, stage and probability." },
 ];
@@ -705,7 +705,7 @@ function friendlyError(status, detail) {
   if (status === 413) return "The files are too large to send together. Try fewer files, or split large PDFs.";
   if (status === 429 || status === 529) return "Claude is busy right now. Wait a minute and try again.";
   if (detail && !/^(API|Server) error \d+$/.test(detail)) return detail;
-  if (status >= 500) return `The server hit an error (${status}). Please try again. If it happens again, send Chase a screenshot.`;
+  if (status >= 500) return `The server hit an error (${status}). Please try again. If it happens again, send a screenshot using the feedback button at the bottom of the page.`;
   return detail || `Request failed (${status}).`;
 }
 
@@ -1588,7 +1588,7 @@ ${WS_PARSE_GUIDE}`;
               </div>
 
               <hr className="help-divider" />
-              <p style={{fontSize:12,color:"#9aa5b4",textAlign:"center"}}>Questions or feedback? Reach out to Chase Cochran.</p>
+              <p style={{fontSize:12,color:"#9aa5b4",textAlign:"center"}}>Questions or ideas? Use the feedback button at the bottom of the page.</p>
             </div>
           </div>
         </div>
@@ -1619,7 +1619,7 @@ ${WS_PARSE_GUIDE}`;
           <h1>{page==="generate" ? "Generate a proposal" : "Custom file creation"}</h1>
           <p>{page==="generate"
             ? "Build a branded assessment or proposal in minutes. Upload your files and let Claude do the writing."
-            : "Describe a freeform document for Claude to write now, or send Chase a brief for files that need photos and design work."}</p>
+            : "Describe a freeform document for Claude to write now, or send a brief for files that need photos and design work."}</p>
           {page==="generate" && savedBanner}
           <div className={"doc-cards" + (page==="files" ? " portal-cards" : "")}>
             {DOC_TYPES.filter(dt => (page==="files") === (dt.id==="custom" || dt.id==="design")).map(dt=>(
@@ -1825,7 +1825,7 @@ ${WS_PARSE_GUIDE}`;
           {/\b(deck|pitch|slides?|presentation|powerpoint|pptx|brochure|flyer|one[- ]pager|infographic|poster|photos?|pictures?|images?|logo|layout|design(ed)?|graphics?)\b/i.test(customPrompt) && (
             <div style={{background:"#fffaeb",border:"1px solid #fedf89",borderRadius:8,padding:"12px 14px",margin:"0 0 16px",fontSize:14,color:"#7a4b00",lineHeight:1.55}}>
               <strong>This sounds like a designed piece</strong> (a deck, brochure, layout or photos). Custom Document can only write a plain Word document.
-              Send it as a <strong>Custom Request</strong> instead: it goes to Chase and is built as a real designed deck or document, with your files and photos.
+              Send it as a <strong>Custom Request</strong> instead: it is built as a real designed deck or document, with your files and photos.
               <div style={{marginTop:10}}>
                 <button className="btn-revise" onClick={()=>{ setDesignSeed({ text: customPrompt, files: customFiles }); setPage("design"); }}>Send as a Custom Request →</button>
               </div>

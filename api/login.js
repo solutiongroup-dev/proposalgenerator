@@ -17,7 +17,7 @@ module.exports = async function (req, res) {
   const body = req.body || {};
   if (body.logout) { res.setHeader('Set-Cookie', clearCookie); res.status(200).json({ signedIn: false }); return; }
 
-  if (!configured) { res.status(503).json({ error: 'Login is not set up yet. Ask Chase to add APP_PASSWORD in Vercel.' }); return; }
+  if (!configured) { res.status(503).json({ error: 'Login is not set up yet. Ask the portal admin to add APP_PASSWORD in Vercel.' }); return; }
   if (!passwordMatches(body.password)) {
     await new Promise(r => setTimeout(r, 1000)); // slow down guessing
     res.status(401).json({ error: 'That password is not right.' });

@@ -151,7 +151,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
     setErrors(errs);
     if (Object.keys(errs).length) { setErr("Fill in the highlighted fields."); return; }
     if (files.some(x => x.tooBig)) { setErr(`Remove files over ${MAX_FILE_MB} MB.`); return; }
-    if (!email.template) { setErr("Custom requests aren't switched on yet: the email template ID is missing. Tell Chase."); return; }
+    if (!email.template) { setErr("Custom requests aren't switched on yet: the email template ID is missing. Let the portal admin know."); return; }
 
     setBusy(true); setErr("");
     const id = newRequestId();
@@ -184,7 +184,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
       const briefUrl = fileLink(briefBlob.pathname);
 
       // 3. Email Chase
-      setStatus("Sending to Chase");
+      setStatus("Sending your request");
       await email.load();
       const MAX = 30000; // EmailJS caps the whole message at 50 KB
       await window.emailjs.send(email.service, email.template, {
@@ -208,7 +208,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
     } catch (e) {
       const msg = e?.text || e?.message || String(e);
       setErr(/BLOB_READ_WRITE_TOKEN|storage not set up/i.test(msg)
-        ? "File storage isn't set up yet. Tell Chase."
+        ? "File storage isn't set up yet. Let the portal admin know."
         : `Request not sent: ${msg}`);
     } finally {
       setBusy(false); setStatus("");
@@ -220,7 +220,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
       <div className="custom-page">
         <div className="custom-title">Request sent</div>
         <div className="custom-sub">
-          Custom request <strong>{done.id}</strong> went to Chase with your files. The finished document will be
+          Custom request <strong>{done.id}</strong> was sent with your files. The finished document will be
           emailed to {f.requesterEmail}.
         </div>
         <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -244,7 +244,7 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
         </div>
       )}
       <div className="custom-sub">
-        For decks, brochures and other designed pieces with photos or custom layout. Chase builds it with Claude
+        For decks, brochures and other designed pieces with photos or custom layout. It is built with Claude
         from this brief, so give the outline and the files it should use.
       </div>
 
@@ -335,10 +335,10 @@ export default function DesignRequest({ onBack, defaultName, email, seed, onSeed
 
       {err && <div className="err-banner"><span>⚠</span><span>{err}</span></div>}
       <button className="btn-parse-big" onClick={submit} disabled={busy}>
-        {busy ? `⏳ ${status || "Sending…"}` : "Send to Chase"}
+        {busy ? `⏳ ${status || "Sending…"}` : "Send request"}
       </button>
       <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#b0bbc8" }}>
-        Chase gets an email with this brief and links to your files. No HubSpot deal is created.
+        The design team gets an email with this brief and links to your files. No HubSpot deal is created.
       </div>
     </div>
   );

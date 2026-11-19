@@ -101,7 +101,7 @@ async function dealUrl(dealId) {
 
 function scopeHint(err, what) {
   if (err.status === 403 || err.category === 'MISSING_SCOPES') {
-    return `${what} (the HubSpot private app is missing a permission; ask Chase to add it)`;
+    return `${what} (the HubSpot private app is missing a permission; ask the portal admin to add it)`;
   }
   return `${what}: ${err.message}`;
 }

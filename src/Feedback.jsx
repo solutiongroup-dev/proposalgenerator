@@ -88,7 +88,7 @@ export default function Feedback({ page, docType, context, variant = "header", l
           <div className="fb-head"><h2>{sent ? "Thank you" : "Help us make this better"}</h2><button onClick={() => setOpen(false)} aria-label="Close">×</button></div>
           {sent ? (
             <div className="fb-body">
-              <p style={{ fontSize: 15, color: "#4a5568", lineHeight: 1.6, margin: 0 }}>{delivered ? "Your feedback went to Chase. If something is broken, it will be looked at right away." : "Your feedback was saved for Chase to read. If something is urgent, message him directly too."}</p>
+              <p style={{ fontSize: 15, color: "#4a5568", lineHeight: 1.6, margin: 0 }}>{delivered ? "Your feedback was sent. If something is broken, it will be looked at right away." : "Your feedback was saved and will be read. If something is urgent, reach out directly too."}</p>
               <button className="fb-send" onClick={() => setOpen(false)}>Close</button>
             </div>
           ) : (
@@ -103,7 +103,7 @@ export default function Feedback({ page, docType, context, variant = "header", l
                 <textarea id="fb-msg" value={message} onChange={e => setMessage(e.target.value)} autoFocus
                   placeholder="e.g. The pricing table split the costs wrong when I uploaded the tracker. Or: I'd like to pick which sections to include." /></div>
               <div><label htmlFor="fb-name">Your name</label>
-                <input id="fb-name" value={name} onChange={e => setName(e.target.value)} placeholder="So Chase can follow up" /></div>
+                <input id="fb-name" value={name} onChange={e => setName(e.target.value)} placeholder="So we can follow up" /></div>
               {error && <div className="fb-err">{error}</div>}
               <button className="fb-send" disabled={busy} onClick={send}>{busy ? "Sending…" : "Send feedback"}</button>
               <div className="fb-note">The page you're on and any error showing are included automatically, so you don't need to describe them.</div>

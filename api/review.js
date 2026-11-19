@@ -70,12 +70,12 @@ module.exports = async function (req, res) {
     }
 
     if (req.method === 'POST' && b.login) {
-      if (!process.env.REVIEW_PASSWORD_SECRET) { res.status(500).json({ error: 'Personal passwords are not set up yet (REVIEW_PASSWORD_SECRET missing). Tell Chase.' }); return; }
+      if (!process.env.REVIEW_PASSWORD_SECRET) { res.status(500).json({ error: 'Personal passwords are not set up yet (REVIEW_PASSWORD_SECRET missing). Let the portal admin know.' }); return; }
       const email = String(b.login.email || '').trim().toLowerCase();
       const owner = (await owners()).find(o => o.email === email);
       if (!owner || !personalPasswordMatches(email, String(b.login.password || ''))) {
         await wait(1000);   // slows down guessing
-        needLogin(res, "That email and password don't match. Use your work email and the personal password Chase sent you.");
+        needLogin(res, "That email and password don't match. Use your work email and your personal password.");
         return;
       }
       if (!hasBdAccess(email)) { needLogin(res, 'BD (M&A) is only open to Tim, John, Chris and Brian.'); return; }

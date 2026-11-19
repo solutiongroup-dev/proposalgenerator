@@ -33,7 +33,7 @@ module.exports = async function (req, res) {
     // 401/403 through, or the page sends the person to the sign-in screen
     if (result.status === 401 || result.status === 403) {
       console.error('Claude rejected the API key:', result.status, result.body.slice(0, 200));
-      res.status(502).json({ error: { message: "Claude rejected the server's API key. Tell Chase (ANTHROPIC_API_KEY in Vercel)." } });
+      res.status(502).json({ error: { message: "Claude rejected the server's API key. Let the portal admin know (ANTHROPIC_API_KEY in Vercel)." } });
       return;
     }
     res.status(result.status).send(result.body);

@@ -48,7 +48,7 @@ export default function LoginGate({ children }) {
       .then(r => r.json())
       .then(d => {
         if (d.signedIn) { if (!goNext()) setState("in"); }
-        else { setState("out"); if (!d.configured) setError("Login is not set up yet. Ask Chase to add APP_PASSWORD in Vercel."); }
+        else { setState("out"); if (!d.configured) setError("Login is not set up yet. Ask the portal admin to add APP_PASSWORD in Vercel."); }
       })
       .catch(() => {
         // Local Vite dev has no API routes; the server still enforces sign-in in production

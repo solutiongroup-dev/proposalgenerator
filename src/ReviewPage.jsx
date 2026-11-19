@@ -452,7 +452,7 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
       {showLock && (
         <form onSubmit={unlockBd} className="rv-card rv-login">
           <div className="rv-title">🔒 BD (M&amp;A) needs your personal password</div>
-          <div className="rv-sub">BD deals are open to Tim, John, Chris and Brian. Enter the personal password Chase sent you; it stays unlocked on this device for 30 days.</div>
+          <div className="rv-sub">BD deals are open to Tim, John, Chris and Brian. Enter your personal password; it stays unlocked on this device for 30 days.</div>
           <input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Personal password" autoFocus />
           <button className="rv-btn primary" type="submit" disabled={signingIn || !password.trim()}>{signingIn ? "Checking…" : "Open BD"}</button>
           {bdError && <div className="rv-msg bad">{bdError}</div>}

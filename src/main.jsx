@@ -23,7 +23,7 @@ class CrashGuard extends React.Component {
         <button onClick={() => window.location.reload()} style={{ marginTop: 18, background: '#2B579A', color: 'white', border: 'none', borderRadius: 6, padding: '12px 26px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
           Reload and restore my work
         </button>
-        <p style={{ color: '#9aa5b4', fontSize: 12, marginTop: 24 }}>If this keeps happening, send Chase a screenshot of this message: {String(this.state.error?.message || this.state.error).slice(0, 200)}</p>
+        <p style={{ color: '#9aa5b4', fontSize: 12, marginTop: 24 }}>If this keeps happening, send a screenshot of this message to the portal admin: {String(this.state.error?.message || this.state.error).slice(0, 200)}</p>
       </div>
     );
   }

@@ -13,7 +13,7 @@ const TAB = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073':
 const BD_ACCESS = ['tbatterson@solutionmgt.com', 'jbrenan@solutionmgt.com', 'cpierce@solutionmgt.com', 'bkoepsel@solutionmgt.com'];
 const hasBdAccess = email => BD_ACCESS.includes(String(email || '').trim().toLowerCase());
 const REVIEW_MARK = 'SG Portal deal review';           // starts every review note, so reviews can be found again
-const DEAL_PROPS = ['dealname', 'pipeline', 'dealstage', 'amount', 'closedate', 'hs_deal_stage_probability',
+const DEAL_PROPS = ['dealname', 'pipeline', 'dealstage', 'hs_is_closed', 'hs_is_closed_won', 'amount', 'closedate', 'hs_deal_stage_probability',
   'estimated_startup_date', 'estimated_contract_end_date', 'hubspot_owner_id', 'hs_lastmodifieddate', 'notes_last_updated', 'deal_notes'];
 
 const DAY = 86400000;
@@ -48,8 +48,8 @@ function matchOwners(owners, who) {
   return owners.filter(o => o.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q)) || o.name.toLowerCase().includes(q) || o.email.startsWith(q));
 }
 
-// Open deals: the owner's own in the sales pipelines, or (ownerId null) everything in the given pipelines
-async function openDeals(ownerId, pipelines) {
+// Deals in the given pipelines: the owner's own (or everyone's when ownerId is null); open only unless withClosed
+async function openDeals(ownerId, pipelines, withClosed = false) {
   const deals = [];
   let after;
   for (let i = 0; i < 10; i++) {
@@ -57,7 +57,7 @@ async function openDeals(ownerId, pipelines) {
       filterGroups: [{ filters: [
         ...(ownerId ? [{ propertyName: 'hubspot_owner_id', operator: 'EQ', value: String(ownerId) }] : []),
         { propertyName: 'pipeline', operator: 'IN', values: pipelines },
-        { propertyName: 'hs_is_closed', operator: 'EQ', value: 'false' },
+        ...(withClosed ? [] : [{ propertyName: 'hs_is_closed', operator: 'EQ', value: 'false' }]),
       ] }],
       properties: DEAL_PROPS, limit: 100, ...(after ? { after } : {}),
     });
@@ -157,7 +157,8 @@ function weekStart(now) {
 // else can edit only their own. owners (id → name) labels whose deal each one is.
 async function ownerReview(ownerId, { bd = false, all = false, owners = {} } = {}) {
   const pipelines = bd ? [...OWN_PIPELINES, ...BD_PIPELINES] : OWN_PIPELINES;
-  const [raw, pipes] = await Promise.all([openDeals(all ? null : ownerId, pipelines), pipelineStages()]);
+  // All Deals includes Closed Won and Closed Lost; My deals is the open ones to review
+  const [raw, pipes] = await Promise.all([openDeals(all ? null : ownerId, pipelines, all), pipelineStages()]);
   const ids = raw.map(d => String(d.id));
   const [{ latest, reviewed }, contactAssoc] = await Promise.all([activity(ids), associated(ids, 'contacts')]);
   const contacts = await readMany('contacts', Object.values(contactAssoc).flat().slice(0, 4000), ['email', 'firstname', 'lastname']);
@@ -190,7 +191,8 @@ async function ownerReview(ownerId, { bd = false, all = false, owners = {} } = {
     const rv = reviewed[id], l = latest[id];
     const newest = rv && (!l || rv.at >= l.at) ? { at: rv.at, kind: "Deal review", by: rv.by } : l ? { at: l.at, kind: l.kind, by: l.by } : null;
     d.lastUpdate = newest && newest.at ? { at: newest.at, kind: newest.kind, by: owners[newest.by] || '' } : null;
-    const a = attention(d, now);
+    d.closed = p.hs_is_closed === 'true' ? (p.hs_is_closed_won === 'true' ? 'won' : 'lost') : '';
+    const a = d.closed ? { reasons: [], score: -2 } : attention(d, now);
     d.reasons = a.reasons;
     // Checked off once a week: a review since Monday counts; after that the deal asks again
     d.reviewedRecently = !!(d.lastReview && d.lastReview.at >= monday);

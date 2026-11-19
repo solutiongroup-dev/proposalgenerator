@@ -89,7 +89,11 @@ const css = `
   .rv-stage:disabled { color: #a0aec0; cursor: default; }
   .rv-stage-bar { height: 14px; background: #edf2f7; border-radius: 4px; overflow: hidden; }
   .rv-stage-bar div { height: 100%; background: linear-gradient(90deg, ${BLUE}, #4FA8A0); border-radius: 4px; }
+  .rv-stage.won .rv-stage-bar div { background: #1D9E75; }
+  .rv-stage.lost .rv-stage-bar div { background: #a0aec0; }
   .rv-stage-n { font-weight: 700; text-align: right; }
+  .rv-tag.won { color: #0a6554; background: #e1f5ee; border: 1px solid #1D9E75; }
+  .rv-tag.lost { color: #4a5568; background: #edf2f7; border: 1px solid #cbd5e0; }
   .rv-stage-amt { text-align: right; color: #4a5568; font-variant-numeric: tabular-nums; }
   .rv-group { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; font-weight: 600; color: ${BLUE}; text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 2px 8px; }
   .rv-group span { text-transform: none; letter-spacing: 0; font-weight: 500; color: #7a8a9a; }
@@ -118,11 +122,12 @@ const updateText = d => d.lastUpdate
 // The open stages of a pipeline, in order, with the deals in each
 function stageGroups(list) {
   const order = [];
-  for (const d of list) for (const st of d.stages || []) if (!order.some(o => o.id === st.id) && !/closed/i.test(st.label)) order.push(st);
+  for (const d of list) for (const st of d.stages || []) if (!order.some(o => o.id === st.id)) order.push(st);
   const groups = order.map(st => ({ ...st, deals: list.filter(d => d.stageId === st.id) }));
   const other = list.filter(d => !order.some(o => o.id === d.stageId));
   if (other.length) groups.push({ id: "_other", label: "Other", deals: other });
-  return groups.map(g => ({ ...g, amount: g.deals.reduce((a, d) => a + (Number(d.amount) || 0), 0) }));
+  return groups.map(g => ({ ...g, amount: g.deals.reduce((a, d) => a + (Number(d.amount) || 0), 0),
+    closed: g.deals[0]?.closed || (/closed\s*won/i.test(g.label) ? "won" : /closed\s*lost/i.test(g.label) ? "lost" : "") }));
 }
 const fmtDate = ts => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
@@ -161,7 +166,7 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSig
   const row = (
     <div className="rv-row-wrap">
       <button className="rv-row" onClick={onOpen} aria-expanded={open}>
-        <span className={"rv-num" + (done ? " done" : open ? " now" : "")}>{done ? "✓" : index + 1}</span>
+        <span className={"rv-num" + (done && !deal.closed ? " done" : open ? " now" : "")}>{done && !deal.closed ? "✓" : index + 1}</span>
         <span className="rv-rowtext">
           <div className="rv-title">{deal.name}</div>
           <div className="rv-sub">{summary}</div>
@@ -169,11 +174,12 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSig
             : !done && <div className={"rv-age" + (deal.weeksSinceReview != null && deal.weeksSinceReview < 2 ? " fresh" : "")}>{ageText(deal)}</div>}
         </span>
         <span className="rv-tags">
-          {done ? <span className="rv-tag ok">{done}</span> : (deal.reasons.length > 0 && <span className="rv-tag warn">{deal.reasons.length} to check</span>)}
+          {deal.closed ? <span className={"rv-tag " + deal.closed}>{deal.closed === "won" ? "Closed Won" : "Closed Lost"}</span>
+            : done ? <span className="rv-tag ok">{done}</span> : (deal.reasons.length > 0 && <span className="rv-tag warn">{deal.reasons.length} to check</span>)}
         </span>
       </button>
       {/* One tap to confirm nothing changed, without opening the deal */}
-      {!done && !open && canEdit && <button className="rv-quick" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : "No updates"}</button>}
+      {!done && !open && canEdit && !deal.closed && <button className="rv-quick" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : "No updates"}</button>}
     </div>
   );
   if (!open) return (
@@ -313,7 +319,7 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
   const deals = scope === "all" && ownerFilter ? allDeals.filter(d => d.ownerName === ownerFilter) : allDeals;
   // Pipeline tabs: Projects, Recurring, WaterSolve (if there are any) and BD (BD group only)
   const tabs = TAB_ORDER.filter(t => t === "Projects" || t === "Recurring" || (t === "BD" ? data?.bd : allDeals.some(d => d.tab === t)))
-    .map(t => { const list = deals.filter(d => d.tab === t); return { name: t, list, todo: list.filter(d => !doneMap[d.id]).length }; });
+    .map(t => { const list = deals.filter(d => d.tab === t); return { name: t, list, todo: list.filter(d => !d.closed && !doneMap[d.id]).length }; });
   const current = tabs.find(t => t.name === tab) || tabs[0];
   // All Deals: grouped by stage, in pipeline order; clicking a stage in the overview shows just that stage
   const groups = scope === "all" ? stageGroups(current?.list || []) : [];
@@ -351,9 +357,10 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
     if (after) scrollTo(after.id);
   };
 
-  const doneCount = shown.filter(d => doneMap[d.id]).length;
-  const todoCount = shown.length - doneCount;
-  const pct = shown.length ? Math.round(doneCount / shown.length * 100) : 0;
+  const reviewable = shown.filter(d => !d.closed);   // closed deals don't need a weekly review
+  const doneCount = reviewable.filter(d => doneMap[d.id]).length;
+  const todoCount = reviewable.length - doneCount;
+  const pct = reviewable.length ? Math.round(doneCount / reviewable.length * 100) : 0;
   const myDeals = data?.deals || [];
 
   return (
@@ -413,15 +420,17 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
 
       {scope === "all" && allData && current?.list.length > 0 && (() => {
         const max = Math.max(1, ...groups.map(g => g.deals.length));
-        const total = current.list.reduce((a, d) => a + (Number(d.amount) || 0), 0);
+        const open = current.list.filter(d => !d.closed);
+        const total = open.reduce((a, d) => a + (Number(d.amount) || 0), 0);
+        const won = current.list.filter(d => d.closed === "won").length, lost = current.list.filter(d => d.closed === "lost").length;
         return (
           <div className="rv-board">
             <div className="rv-board-head">
-              <span><strong>{current.name === "BD" ? "BD (M&A)" : current.name}</strong> · {current.list.length} open deal{current.list.length === 1 ? "" : "s"}{total ? ` · ${usd(total)}` : ""}</span>
+              <span><strong>{current.name === "BD" ? "BD (M&A)" : current.name}</strong> · {open.length} open{total ? ` (${usd(total)})` : ""} · {won} won · {lost} lost</span>
               {stageFilter ? <a href="#" onClick={e => { e.preventDefault(); setStageFilter(""); }}>Show all stages</a> : <span>Click a stage to filter</span>}
             </div>
             {groups.map(g => (
-              <button key={g.id} className={"rv-stage" + (stageFilter === g.id ? " on" : "")} disabled={!g.deals.length}
+              <button key={g.id} className={"rv-stage" + (stageFilter === g.id ? " on" : "") + (g.closed ? " " + g.closed : "")} disabled={!g.deals.length}
                 onClick={() => { setStageFilter(stageFilter === g.id ? "" : g.id); setOpenId(""); }}>
                 <span>{g.label}</span>
                 <span className="rv-stage-bar"><div style={{ width: `${g.deals.length / max * 100}%` }} /></span>
@@ -434,15 +443,15 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
       })()}
 
       {view && !shown.length && <div className="rv-card">{scope === "all" ? `No open ${current?.name === "BD" ? "BD" : current?.name || ""} deals${ownerFilter ? ` for ${ownerFilter}` : ""}.` : current?.name === "BD" ? "You don't own any open BD deals. See All Deals for the whole pipeline." : `No open ${current?.name || ""} deals are assigned to ${data.owner.name} in HubSpot.`}</div>}
-      {shown.length > 0 && (
+      {reviewable.length > 0 && (
         <div className="rv-progress">
           <div className="rv-progress-top">
-            <span><strong>{doneCount} of {shown.length}</strong> reviewed this week</span>
+            <span><strong>{doneCount} of {reviewable.length}</strong> {scope === "all" ? "open deals " : ""}reviewed this week</span>
             <span style={{ color: todoCount ? "#7a8a9a" : "#1D9E75", fontWeight: 600 }}>{todoCount ? `${todoCount} to go` : "All done ✓"}</span>
           </div>
           <div className="rv-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}><div style={{ width: `${pct}%` }} /></div>
-          {shown.length <= 60 && <div className="rv-steps">
-            {shown.map((d, i) => (
+          {reviewable.length <= 60 && <div className="rv-steps">
+            {reviewable.map((d, i) => (
               <button key={d.id} className={"rv-step" + (doneMap[d.id] ? " done" : d.id === openId ? " now" : "")} title={`${d.name}${doneMap[d.id] ? ` · ${doneMap[d.id]}` : ""}`} onClick={() => openDeal(d.id)}>
                 {doneMap[d.id] ? "✓" : i + 1}
               </button>

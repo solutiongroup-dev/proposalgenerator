@@ -6,9 +6,13 @@
 const { hubspotRequest } = require('./_hubspot');
 const { pipelineStages } = require('./_crm');
 
-const PIPELINES = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073': 'WaterSolve' };
+const PIPELINES = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073': 'WaterSolve', '2710441665': 'M&A' };
+const OWN_PIPELINES = ['2276783856', '2277462760', '2504421073'];   // each person sees the deals they own here
+const BD_PIPELINES = ['2710441665'];                                 // BD (M&A): the whole pipeline, for BD_ACCESS only
+const TAB = { '2276783856': 'Recurring', '2277462760': 'Projects', '2504421073': 'WaterSolve', '2710441665': 'BD' };
+const BD_ACCESS = ['tbatterson@solutionmgt.com', 'jbrenan@solutionmgt.com', 'cpierce@solutionmgt.com', 'bkoepsel@solutionmgt.com'];
+const hasBdAccess = email => BD_ACCESS.includes(String(email || '').trim().toLowerCase());
 const REVIEW_MARK = 'SG Portal deal review';           // starts every review note, so reviews can be found again
-const REVIEWED_WITHIN_DAYS = 7;
 const DEAL_PROPS = ['dealname', 'pipeline', 'dealstage', 'amount', 'closedate', 'hs_deal_stage_probability',
   'estimated_startup_date', 'estimated_contract_end_date', 'hubspot_owner_id', 'hs_lastmodifieddate', 'notes_last_updated', 'deal_notes'];
 
@@ -44,14 +48,15 @@ function matchOwners(owners, who) {
   return owners.filter(o => o.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q)) || o.name.toLowerCase().includes(q) || o.email.startsWith(q));
 }
 
-async function ownerOpenDeals(ownerId) {
+// Open deals: the owner's own in the sales pipelines, or (ownerId null) everything in the given pipelines
+async function openDeals(ownerId, pipelines) {
   const deals = [];
   let after;
   for (let i = 0; i < 5; i++) {
     const r = await hubspotRequest('POST', '/crm/v3/objects/deals/search', {
       filterGroups: [{ filters: [
-        { propertyName: 'hubspot_owner_id', operator: 'EQ', value: String(ownerId) },
-        { propertyName: 'pipeline', operator: 'IN', values: Object.keys(PIPELINES) },
+        ...(ownerId ? [{ propertyName: 'hubspot_owner_id', operator: 'EQ', value: String(ownerId) }] : []),
+        { propertyName: 'pipeline', operator: 'IN', values: pipelines },
         { propertyName: 'hs_is_closed', operator: 'EQ', value: 'false' },
       ] }],
       properties: DEAL_PROPS, limit: 100, ...(after ? { after } : {}),
@@ -138,14 +143,25 @@ function attention(d, now) {
   return { reasons, score };
 }
 
-async function ownerReview(ownerId) {
-  const [raw, pipes] = await Promise.all([ownerOpenDeals(ownerId), pipelineStages()]);
+// Reviews count for the current week, Monday to Sunday (Central time, when the reminder goes out)
+function weekStart(now) {
+  const ct = new Date(new Date(now).toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const offset = now - ct.getTime();                        // Central time → UTC
+  ct.setHours(0, 0, 0, 0);
+  ct.setDate(ct.getDate() - ((ct.getDay() + 6) % 7));       // back to Monday
+  return ct.getTime() + offset;
+}
+
+// One person's review list: their own open deals, plus the whole BD (M&A) pipeline when bd is true
+async function ownerReview(ownerId, { bd = false } = {}) {
+  const [own, bdDeals, pipes] = await Promise.all([openDeals(ownerId, OWN_PIPELINES), bd ? openDeals(null, BD_PIPELINES) : [], pipelineStages()]);
+  const raw = [...own, ...bdDeals];
   const ids = raw.map(d => String(d.id));
   const [{ latest, reviewed }, contactAssoc] = await Promise.all([activity(ids), associated(ids, 'contacts')]);
   const contacts = await readMany('contacts', Object.values(contactAssoc).flat().slice(0, 1500), ['email', 'firstname', 'lastname']);
   // The customer is the first linked contact who isn't one of our own people
   const isCustomer = c => c && !/@solutionmgt\.com$/i.test(c.email || '');
-  const now = Date.now();
+  const now = Date.now(), monday = weekStart(now);
 
   const deals = raw.map(r => {
     const p = r.properties || {}, id = String(r.id), pipe = pipes[p.pipeline] || { label: PIPELINES[p.pipeline], stages: {} };
@@ -153,7 +169,7 @@ async function ownerReview(ownerId) {
     const startup = dateOnly(p.estimated_startup_date), end = dateOnly(p.estimated_contract_end_date), close = dateOnly(p.closedate);
     const from = startup || close;
     const d = {
-      id, name: p.dealname || '(no name)', pipelineId: p.pipeline, pipeline: PIPELINES[p.pipeline] || pipe.label,
+      id, name: p.dealname || '(no name)', pipelineId: p.pipeline, pipeline: PIPELINES[p.pipeline] || pipe.label, tab: TAB[p.pipeline] || 'Other',
       stageId: p.dealstage, stage: pipe.stages[p.dealstage]?.label || '',
       stages: Object.entries(pipe.stages).sort((a, b) => a[1].order - b[1].order).map(([sid, s]) => ({ id: sid, label: s.label })),
       amount: p.amount ? Number(p.amount) : null,
@@ -168,7 +184,9 @@ async function ownerReview(ownerId) {
     };
     const a = attention(d, now);
     d.reasons = a.reasons;
-    d.reviewedRecently = !!(d.lastReview && d.lastReview.at > now - REVIEWED_WITHIN_DAYS * DAY);
+    // Checked off once a week: a review since Monday counts; after that the deal asks again
+    d.reviewedRecently = !!(d.lastReview && d.lastReview.at >= monday);
+    d.weeksSinceReview = d.lastReview ? Math.floor((now - d.lastReview.at) / (7 * DAY)) : null;
     d.score = d.reviewedRecently ? -1 : a.score;
     return d;
   });
@@ -177,4 +195,4 @@ async function ownerReview(ownerId) {
   return deals;
 }
 
-module.exports = { PIPELINES, REVIEW_MARK, DEAL_PROPS, listOwners, matchOwners, ownerReview, dateOnly, strip };
+module.exports = { PIPELINES, BD_PIPELINES, hasBdAccess, REVIEW_MARK, DEAL_PROPS, listOwners, matchOwners, ownerReview, dateOnly, strip };

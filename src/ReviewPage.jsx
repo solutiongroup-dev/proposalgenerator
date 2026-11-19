@@ -59,20 +59,40 @@ const css = `
   .rv-step { width: 22px; height: 22px; border-radius: 50%; border: none; font-size: 10px; font-weight: 700; cursor: pointer; background: #e2e8f0; color: #4a5568; font-family: inherit; padding: 0; }
   .rv-step.done { background: #1D9E75; color: white; }
   .rv-step.now { background: ${BLUE}; color: white; box-shadow: 0 0 0 2px #F2F5FA, 0 0 0 4px ${BLUE}; }
+  .rv-row-wrap { display: flex; align-items: center; gap: 10px; }
+  .rv-row-wrap .rv-row { flex: 1; min-width: 0; width: auto; }
+  .rv-quick { flex-shrink: 0; background: white; color: ${BLUE}; border: 1.5px solid ${BLUE}; border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
+  .rv-quick:hover { background: #eef3fb; }
+  .rv-quick:disabled { opacity: 0.55; cursor: default; }
+  .rv-age { font-size: 11px; color: #b54708; font-weight: 600; margin-top: 2px; }
+  .rv-age.fresh { color: #7a8a9a; font-weight: 500; }
+  .rv-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+  .rv-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 14px; border-bottom: 2px solid #e2e8f0; }
+  .rv-tab { background: none; border: none; border-bottom: 3px solid transparent; margin-bottom: -2px; padding: 9px 14px; font-size: 15px; font-weight: 600; color: #7a8a9a; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 7px; }
+  .rv-tab.on { color: ${BLUE}; border-bottom-color: ${BLUE}; }
+  .rv-count { font-size: 12px; font-weight: 700; border-radius: 10px; padding: 1px 8px; background: #edf2f7; color: #4a5568; }
+  .rv-tab.on .rv-count { background: ${BLUE}; color: white; }
+  .rv-todo-dot { font-size: 11px; font-weight: 600; color: #b54708; }
+  .rv-login { display: grid; gap: 10px; max-width: 420px; }
+  .rv-login input { font-size: 16px; padding: 10px 12px; border: 1px solid #cbd5e0; border-radius: 8px; font-family: inherit; width: 100%; box-sizing: border-box; }
+  @media (max-width: 520px) { .rv-tags .rv-tag.warn { display: none; } .rv-quick { padding: 6px 9px; } }
   @media (max-width: 640px) { .rv-grid { grid-template-columns: 1fr 1fr; } .rv-grid .wide { grid-column: 1 / -1; } .rv-card { padding: 16px; } }
   @media (max-width: 400px) { .rv-grid { grid-template-columns: 1fr; } }
 `;
 
-const FIELDS = ["customerEmail", "closeDate", "amount", "contractDays", "startupDate", "stageId", "probability"];
-const valuesOf = d => ({ customerEmail: d.customer?.email || "", closeDate: d.closeDate || "", amount: d.amount ?? "",
+const FIELDS = ["customerName", "customerEmail", "closeDate", "amount", "contractDays", "startupDate", "stageId", "probability"];
+const valuesOf = d => ({ customerName: d.customer?.name || "", customerEmail: d.customer?.email || "", closeDate: d.closeDate || "", amount: d.amount ?? "",
   contractDays: d.contractDays ?? "", startupDate: d.startupDate || "", stageId: d.stageId || "", probability: d.probability ?? "" });
+// How long since this deal was last reviewed, shown on every row
+const ageText = d => d.weeksSinceReview == null ? "Not reviewed yet"
+  : d.weeksSinceReview < 1 ? "Reviewed last week" : `${d.weeksSinceReview} week${d.weeksSinceReview === 1 ? "" : "s"} since last update`;
+const TAB_ORDER = ["Projects", "Recurring", "WaterSolve", "BD"];
 const fmtDate = ts => new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
+function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSignedOut }) {
   const original = valuesOf(deal);
   const [v, setV] = useState(original);
   const [context, setContext] = useState("");
-  const [customerName, setCustomerName] = useState("");
   const [savedNote, setSavedNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -86,8 +106,9 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
     try {
       const changes = Object.fromEntries(changed.map(k => [k, k === "amount" || k === "contractDays" || k === "probability" ? (v[k] === "" ? "" : Number(v[k])) : v[k]]));
       const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner, t: token, dealId: deal.id, noUpdates, context, changes, original, customerName }) });
+        body: JSON.stringify({ owner, t: token, dealId: deal.id, noUpdates, context, changes, original }) });
       const d = await r.json().catch(() => ({}));
+      if (d.needLogin) { onSignedOut(d.error); return; }
       if (!r.ok) throw new Error(d.error || `Could not save (${r.status}).`);
       const label = noUpdates && !changed.length ? "No updates" : (d.changes?.length ? `${d.changes.length} update${d.changes.length === 1 ? "" : "s"}` : "Context added");
       setContext(""); setSavedNote(d.contactNote || "");
@@ -98,17 +119,28 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
     setBusy(false);
   };
 
-  const summary = `${deal.pipeline} · ${deal.stage}${deal.amount != null ? ` · $${Math.round(deal.amount).toLocaleString("en-US")}` : ""}${deal.closeDate ? ` · closes ${deal.closeDate}` : ""}`;
+  const summary = `${deal.stage}${deal.amount != null ? ` · $${Math.round(deal.amount).toLocaleString("en-US")}` : ""}${deal.closeDate ? ` · closes ${deal.closeDate}` : ""}`;
   const row = (
-    <button className="rv-row" onClick={onOpen} aria-expanded={open}>
-      <span className={"rv-num" + (done ? " done" : open ? " now" : "")}>{done ? "✓" : index + 1}</span>
-      <span className="rv-rowtext"><div className="rv-title">{deal.name}</div><div className="rv-sub">{summary}</div></span>
-      {done ? <span className="rv-tag ok">{done}</span> : (deal.reasons.length > 0 && <span className="rv-tag warn">{deal.reasons.length} to check</span>)}
-    </button>
+    <div className="rv-row-wrap">
+      <button className="rv-row" onClick={onOpen} aria-expanded={open}>
+        <span className={"rv-num" + (done ? " done" : open ? " now" : "")}>{done ? "✓" : index + 1}</span>
+        <span className="rv-rowtext">
+          <div className="rv-title">{deal.name}</div>
+          <div className="rv-sub">{summary}</div>
+          {!done && <div className={"rv-age" + (deal.weeksSinceReview != null && deal.weeksSinceReview < 2 ? " fresh" : "")}>{ageText(deal)}</div>}
+        </span>
+        <span className="rv-tags">
+          {done ? <span className="rv-tag ok">{done}</span> : (deal.reasons.length > 0 && <span className="rv-tag warn">{deal.reasons.length} to check</span>)}
+        </span>
+      </button>
+      {/* One tap to confirm nothing changed, without opening the deal */}
+      {!done && !open && <button className="rv-quick" disabled={busy} onClick={() => save(true)}>{busy ? "Saving…" : "No updates"}</button>}
+    </div>
   );
   if (!open) return (
     <div className="rv-card closed" id={`deal-${deal.id}`}>
       {row}
+      {msg && <div className={"rv-msg " + (msg.bad ? "bad" : "good")}>{msg.text}</div>}
       {savedNote && <div style={{ fontSize: 12, color: "#0a6554", margin: "6px 0 0 40px" }}>✓ {savedNote}</div>}
     </div>
   );
@@ -127,12 +159,10 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
           {deal.dealNotes ? <>{"\n\n"}<b>Deal notes:</b> {deal.dealNotes}</> : null}
         </div>
         <div className="rv-grid">
-          <div className="rv-f wide"><label>Customer email{deal.customer?.name ? ` (${deal.customer.name})` : ""}</label>
+          <div className="rv-f"><label>Customer name</label>
+            <input className={cls("customerName")} value={v.customerName} onChange={e => set("customerName", e.target.value)} placeholder="First Last" autoComplete="off" /></div>
+          <div className="rv-f wide"><label>Customer email</label>
             <input type="email" inputMode="email" autoCapitalize="none" className={cls("customerEmail")} value={v.customerEmail} onChange={e => set("customerEmail", e.target.value)} placeholder="name@customer.com" /></div>
-          {!deal.customer && changed.includes("customerEmail") && (
-            <div className="rv-f"><label>Customer name (if new)</label>
-              <input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="First Last" /></div>
-          )}
           <div className="rv-f"><label>Close date</label>
             <input type="date" className={cls("closeDate")} value={v.closeDate} onChange={e => set("closeDate", e.target.value)} /></div>
           <div className="rv-f"><label>Deal amount ($)</label>
@@ -162,26 +192,66 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone }) {
 }
 
 export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
-  const [owner, setOwner] = useState(linkOwner);
-  const [who, setWho] = useState(store.get("sg_review_who") || "");
-  const [matches, setMatches] = useState(null);
   const [data, setData] = useState(null);
+  const [needLogin, setNeedLogin] = useState(false);
+  const [email, setEmail] = useState(store.get("sg_review_email") || "");
+  const [password, setPassword] = useState("");
+  const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [doneMap, setDoneMap] = useState({});   // deal id -> "No updates" / "2 updates"
   const [openId, setOpenId] = useState("");
+  const [tab, setTab] = useState("");
+  // The personal link from the weekly email; dropped once they sign in with their password
+  const [link, setLink] = useState(linkOwner && linkToken ? { owner: linkOwner, token: linkToken } : null);
 
-  const load = id => {
-    setLoading(true); setError(""); setData(null);
-    fetch(`/api/review?owner=${encodeURIComponent(id)}${linkToken ? `&t=${encodeURIComponent(linkToken)}` : ""}`)
+  const load = () => {
+    setLoading(true); setError("");
+    const qs = link ? `?owner=${encodeURIComponent(link.owner)}&t=${encodeURIComponent(link.token)}` : "";
+    fetch(`/api/review${qs}`)
       .then(r => r.json().then(d => ({ ok: r.ok, d })))
-      .then(({ ok, d }) => { if (!ok) throw new Error(d.error || "Could not load your deals."); setData(d); })
+      .then(({ ok, d }) => {
+        if (d.needLogin) { setNeedLogin(true); setData(null); if (qs) setError(d.error); return; }
+        if (!ok) throw new Error(d.error || "Could not load your deals.");
+        setNeedLogin(false); setData(d);
+      })
       .catch(e => setError(e.message === "Failed to fetch" ? "Could not reach the server." : e.message))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { if (owner) load(owner); }, [owner]);
+  useEffect(load, [link]);
 
-  // Once loaded: deals already reviewed this week start checked off; open the first one left
+  const signIn = async e => {
+    e.preventDefault();
+    if (!email.trim() || !password.trim()) return;
+    setSigningIn(true); setError("");
+    try {
+      const r = await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: { email: email.trim(), password: password.trim() } }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Could not sign in.");
+      store.set("sg_review_email", email.trim());
+      setPassword(""); setNeedLogin(false);
+      // the personal cookie now identifies them; drop the email link so it doesn't take priority
+      if (link) { window.history.replaceState(null, "", window.location.pathname + "?review"); setLink(null); }
+      else load();
+    } catch (err) { setError(err.message === "Failed to fetch" ? "Could not reach the server." : err.message); }
+    setSigningIn(false);
+  };
+  const signOut = async e => {
+    e.preventDefault();
+    try { await fetch("/api/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ logout: true }) }); } catch (err) {}
+    setData(null); setDoneMap({}); setLoadedFor(""); setTab(""); setNeedLogin(true);
+  };
+  const signedOut = msg => { setData(null); setNeedLogin(true); setError(msg || "Please sign in again."); };
+
+  const deals = data?.deals || [];
+  // Tabs: Projects, Recurring, WaterSolve (if they have any) and BD (for the BD group)
+  const tabs = TAB_ORDER.filter(t => t === "Projects" || t === "Recurring" || (t === "BD" ? data?.bd : deals.some(d => d.tab === t)))
+    .map(t => { const list = deals.filter(d => d.tab === t); return { name: t, list, todo: list.filter(d => !doneMap[d.id]).length }; });
+  const current = tabs.find(t => t.name === tab) || tabs[0];
+  const shown = current?.list || [];
+
+  // Once loaded: deals already reviewed this week start checked off; start on the first tab with work left
   const [loadedFor, setLoadedFor] = useState("");
   useEffect(() => {
     if (!data || loadedFor === data.owner.id) return;
@@ -189,46 +259,33 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
     const init = {};
     for (const d of data.deals) if (d.reviewedRecently) init[d.id] = "Reviewed this week";
     setDoneMap(init);
-    setOpenId((data.deals.find(d => !init[d.id]) || {}).id || "");
+    const first = TAB_ORDER.find(t => data.deals.some(d => d.tab === t && !init[d.id])) || "Projects";
+    setTab(first);
+    setOpenId("");
   }, [data]);
 
   const scrollTo = id => setTimeout(() => document.getElementById(`deal-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
   const openDeal = id => { setOpenId(prev => prev === id ? "" : id); scrollTo(id); };
 
-  // After a save: check it off, keep the new values, and open the next deal still to do
+  // After a save: check it off, keep the new values, and open the next deal still to do in this tab
   const markDone = (id, label, v) => {
     const next = { ...doneMap, [id]: label };
     setDoneMap(next);
-    const list = data?.deals || [];
     setData(prev => prev && ({ ...prev, deals: prev.deals.map(d => d.id !== id ? d : {
       ...d, closeDate: v.closeDate, amount: v.amount === "" ? null : Number(v.amount), contractDays: v.contractDays === "" ? null : Number(v.contractDays),
-      startupDate: v.startupDate, stageId: v.stageId, stage: d.stages.find(s => s.id === v.stageId)?.label || d.stage,
-      probability: v.probability === "" ? null : Number(v.probability), customer: v.customerEmail ? { ...(d.customer || {}), email: v.customerEmail } : d.customer }) }));
-    const at = list.findIndex(d => d.id === id);
-    const after = [...list.slice(at + 1), ...list.slice(0, at)].find(d => !next[d.id]);
+      startupDate: v.startupDate, stageId: v.stageId, stage: d.stages.find(s => s.id === v.stageId)?.label || d.stage, weeksSinceReview: 0,
+      probability: v.probability === "" ? null : Number(v.probability),
+      customer: v.customerEmail || v.customerName ? { ...(d.customer || {}), email: v.customerEmail, name: v.customerName } : d.customer }) }));
+    if (openId !== id) return;   // a one-tap "No updates" on a closed row doesn't move anything
+    const at = shown.findIndex(d => d.id === id);
+    const after = [...shown.slice(at + 1), ...shown.slice(0, at)].find(d => !next[d.id]);
     setOpenId(after ? after.id : "");
     if (after) scrollTo(after.id);
   };
 
-  const find = async e => {
-    e.preventDefault();
-    if (!who.trim()) return;
-    setError(""); setMatches(null);
-    try {
-      const r = await fetch(`/api/review?who=${encodeURIComponent(who.trim())}`);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "Could not look that up.");
-      store.set("sg_review_who", who.trim());
-      if (d.owners.length === 1) setOwner(d.owners[0].id);
-      else if (!d.owners.length) setError("No HubSpot user matches that name or email. Try your work email.");
-      else setMatches(d.owners);
-    } catch (err) { setError(err.message); }
-  };
-
-  const deals = data?.deals || [];
-  const doneCount = deals.filter(d => doneMap[d.id]).length;
-  const todoCount = deals.length - doneCount;
-  const pct = deals.length ? Math.round(doneCount / deals.length * 100) : 0;
+  const doneCount = shown.filter(d => doneMap[d.id]).length;
+  const todoCount = shown.length - doneCount;
+  const pct = shown.length ? Math.round(doneCount / shown.length * 100) : 0;
 
   return (
     <div className="rv-page">
@@ -236,41 +293,48 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
       {onBack && <button className="form-back" onClick={onBack}>← Back to the portal</button>}
       <div className="form-title">Weekly deal review</div>
 
-      {!owner ? (
+      {needLogin ? (
         <>
-          <div className="form-subtitle">Enter your name or work email to see the HubSpot deals you own.</div>
-          <form onSubmit={find} className="rv-card" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input value={who} onChange={e => setWho(e.target.value)} placeholder="Your name or email" autoFocus
-              style={{ flex: 1, minWidth: 200, fontSize: 16, padding: "10px 12px", border: "1px solid #cbd5e0", borderRadius: 8, fontFamily: "inherit" }} />
-            <button className="rv-btn primary" type="submit">Show my deals</button>
+          <div className="form-subtitle">Sign in with your work email and your personal password.</div>
+          <form onSubmit={signIn} className="rv-card rv-login">
+            <input type="email" autoComplete="username" autoCapitalize="none" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@solutionmgt.com" autoFocus={!email} />
+            <input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Personal password" autoFocus={!!email} />
+            <button className="rv-btn primary" type="submit" disabled={signingIn}>{signingIn ? "Signing in…" : "Show my deals"}</button>
+            <div className="rv-sub">Don't have your password? Ask Chase.</div>
           </form>
-          {matches && (
-            <div className="rv-card">
-              <div className="rv-sub" style={{ marginBottom: 8 }}>Which one are you?</div>
-              {matches.map(m => <button key={m.id} className="rv-btn ghost" style={{ margin: "0 8px 8px 0" }} onClick={() => setOwner(m.id)}>{m.name}</button>)}
-            </div>
-          )}
         </>
       ) : (
         <div className="form-subtitle">
-          {data ? <><strong>{data.owner.name}</strong> · {deals.length} open deal{deals.length === 1 ? "" : "s"} · {todoCount} to review</> : "Loading your deals from HubSpot…"}
-          {!linkToken && data && <> · <a href="#" onClick={e => { e.preventDefault(); setOwner(""); setData(null); }}>Not you?</a></>}
+          {data ? <><strong>{data.owner.name}</strong> · {deals.length} open deal{deals.length === 1 ? "" : "s"} · {deals.filter(d => !doneMap[d.id]).length} to review this week</> : "Loading your deals from HubSpot…"}
+          {data && !data.viaLink && <> · <a href="#" onClick={signOut}>Sign out</a></>}
         </div>
       )}
 
       {error && <div className="rv-msg bad">{error}</div>}
-      {loading && <div className="rv-sub">Loading…</div>}
+      {loading && !data && <div className="rv-sub">Loading…</div>}
 
-      {data && !deals.length && <div className="rv-card">No open deals in Recurring, Projects or WaterSolve are assigned to {data.owner.name} in HubSpot.</div>}
-      {deals.length > 0 && (
+      {data && (
+        <div className="rv-tabs" role="tablist">
+          {tabs.map(t => (
+            <button key={t.name} role="tab" aria-selected={current?.name === t.name} className={"rv-tab" + (current?.name === t.name ? " on" : "")}
+              onClick={() => { setTab(t.name); setOpenId(""); }}>
+              {t.name === "BD" ? "BD (M&A)" : t.name} <span className="rv-count">{t.list.length}</span>
+              {t.todo > 0 && <span className="rv-todo-dot">{t.todo} to do</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {data && !shown.length && <div className="rv-card">{current?.name === "BD" ? "No open deals in the M&A pipeline." : `No open ${current?.name || ""} deals are assigned to ${data.owner.name} in HubSpot.`}</div>}
+      {shown.length > 0 && (
         <div className="rv-progress">
           <div className="rv-progress-top">
-            <span><strong>{doneCount} of {deals.length}</strong> reviewed</span>
+            <span><strong>{doneCount} of {shown.length}</strong> reviewed this week</span>
             <span style={{ color: todoCount ? "#7a8a9a" : "#1D9E75", fontWeight: 600 }}>{todoCount ? `${todoCount} to go` : "All done ✓"}</span>
           </div>
           <div className="rv-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}><div style={{ width: `${pct}%` }} /></div>
           <div className="rv-steps">
-            {deals.map((d, i) => (
+            {shown.map((d, i) => (
               <button key={d.id} className={"rv-step" + (doneMap[d.id] ? " done" : d.id === openId ? " now" : "")} title={`${d.name}${doneMap[d.id] ? ` · ${doneMap[d.id]}` : ""}`} onClick={() => openDeal(d.id)}>
                 {doneMap[d.id] ? "✓" : i + 1}
               </button>
@@ -278,10 +342,10 @@ export default function ReviewPage({ onBack, linkOwner = "", linkToken = "" }) {
           </div>
         </div>
       )}
-      {deals.length > 0 && !todoCount && <div className="rv-msg good" style={{ marginBottom: 12 }}>🎉 All caught up. Every deal has been reviewed this week. Thank you!</div>}
+      {shown.length > 0 && !todoCount && <div className="rv-msg good" style={{ marginBottom: 12 }}>🎉 All caught up on {current.name === "BD" ? "BD" : current.name} this week. Thank you!</div>}
 
-      {deals.map((d, i) => (
-        <DealCard key={d.id} deal={d} index={i} owner={owner} token={linkToken}
+      {shown.map((d, i) => (
+        <DealCard key={d.id} deal={d} index={i} owner={link?.owner || ""} token={link?.token || ""} onSignedOut={signedOut}
           open={openId === d.id} done={doneMap[d.id] || ""} onOpen={() => openDeal(d.id)} onDone={markDone} />
       ))}
     </div>

@@ -36,6 +36,12 @@ module.exports = async function (req, res) {
       res.status(502).json({ error: { message: "Claude rejected the server's API key. Let the portal admin know (ANTHROPIC_API_KEY in Vercel)." } });
       return;
     }
+    // Out of prepaid credits: say so plainly (Claude's own wording mentions "credit balance")
+    if (/credit balance/i.test(result.body)) {
+      console.error('CLAUDE OUT OF CREDITS:', result.body.slice(0, 200));
+      res.status(402).json({ error: { message: "The portal's Claude account is out of credits, so nothing can be generated right now. Let the portal admin know: credits are added in the Anthropic Console under Billing." } });
+      return;
+    }
     res.status(result.status).send(result.body);
   } catch (err) {
     res.status(502).json({ error: { message: `Proxy error: ${err.message}` } });

@@ -747,6 +747,10 @@ function callClaudeOnce(messages, maxTokens) {
         let parsed;
         try { parsed = JSON.parse(data); }
         catch (e) { return reject(Object.assign(new Error(`Claude returned an unreadable response (${res.statusCode}).`), { retry: true })); }
+        if (parsed.error && /credit balance/i.test(parsed.error.message || '')) {
+          console.error('CLAUDE OUT OF CREDITS:', parsed.error.message);
+          return reject(new Error("The portal's Claude account is out of credits, so nothing can be generated right now. Let the portal admin know: credits are added in the Anthropic Console under Billing."));
+        }
         if (parsed.error) {
           // 529 overloaded, 429 rate limited and 5xx are temporary
           const retry = res.statusCode === 529 || res.statusCode === 429 || res.statusCode >= 500;

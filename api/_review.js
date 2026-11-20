@@ -22,14 +22,26 @@ const strip = html => String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
   .replace(/\n{3,}/g, '\n\n').trim();
 
+// Names for team members whose HubSpot user record has no name (fill these in HubSpot to retire this list)
+const KNOWN_NAMES = {
+  'tbatterson@solutionmgt.com': 'Tim Batterson', 'jbrenan@solutionmgt.com': 'John Brenan', 'cpierce@solutionmgt.com': 'Chris Pierce',
+  'bkoepsel@solutionmgt.com': 'Brian Koepsel', 'msilver@solutionmgt.com': 'Mike Silver', 'twinkelman@solutionmgt.com': 'Ted Winkelman',
+  'jrohlman@solutionmgt.com': 'Jeff Rohlman', 'snelson@solutionmgt.com': 'Steve Nelson', 'bweber@solutionmgt.com': 'Benjamin Weber',
+  'ekasparian@solutionmgt.com': 'Erik Kasparian', 'ccarr@solutionmgt.com': 'Chip Carr', 'clutelle@solutionmgt.com': 'Chander Lutelle',
+};
+// "ted winkelman" → "Ted Winkelman"; names already capitalized are left alone
+const titleCase = n => n && n === n.toLowerCase() ? n.replace(/\b\w/g, c => c.toUpperCase()) : n;
+
 async function listOwners() {
   const owners = [];
   let after;
   for (let i = 0; i < 10; i++) {
     const page = await hubspotRequest('GET', `/crm/v3/owners/?limit=100&archived=false${after ? `&after=${after}` : ''}`);
     for (const o of page.results || []) {
-      const name = [o.firstName, o.lastName].filter(Boolean).join(' ').trim();
-      owners.push({ id: String(o.id), name: name || o.email, email: (o.email || '').toLowerCase() });
+      const email = (o.email || '').toLowerCase();
+      // Some HubSpot users have no first/last name set: use the known name for their email
+      const name = [o.firstName, o.lastName].filter(Boolean).join(' ').trim() || KNOWN_NAMES[email] || '';
+      owners.push({ id: String(o.id), name: titleCase(name) || o.email, email });
     }
     after = page.paging?.next?.after;
     if (!after) break;

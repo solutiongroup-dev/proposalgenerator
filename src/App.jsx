@@ -516,6 +516,9 @@ async function readDocxAsText(file) {
   return result.value;
 }
 
+// Excel workbooks, including macro-enabled .xlsm and .xlsb: the data is read, macros are ignored (never run)
+const isSpreadsheet = f => /\.(xlsx|xlsm|xlsb|xls)$/i.test(f.name) || /spreadsheetml|ms-excel/.test(f.type);
+
 async function readSpreadsheetAsText(file) {
   // Load SheetJS from CDN if not already loaded
   if (!window.XLSX) {
@@ -1011,7 +1014,7 @@ export default function App() {
         if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
           const text = await readDocxAsText(f);
           fileContents.push(`[Document: ${f.name}]\n${text}`);
-        } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
+        } else if (isSpreadsheet(f)) {
           const text = await readSpreadsheetAsText(f);
           fileContents.push(`[Spreadsheet: ${f.name}]\n${text}`);
         } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="text/plain") {
@@ -1058,7 +1061,7 @@ export default function App() {
         } else if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
           const text = await readDocxAsText(f);
           msgContent.push({ type:"text", text:"[Document: " + f.name + "]\n" + text });
-        } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
+        } else if (isSpreadsheet(f)) {
           const text = await readSpreadsheetAsText(f);
           msgContent.push({ type:"text", text:"[Spreadsheet: " + f.name + "]\n" + text });
         } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="text/plain") {
@@ -1174,10 +1177,10 @@ ${WS_PARSE_GUIDE}`;
     const ok = Array.from(incoming).filter(f=>
       ["application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document",
        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-       "application/vnd.ms-excel",
+       "application/vnd.ms-excel", "application/vnd.ms-excel.sheet.macroEnabled.12", "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
        "text/plain","text/csv","application/csv",
        "image/png","image/jpeg"].includes(f.type)
-      || f.name.endsWith(".csv") || f.name.endsWith(".xlsx") || f.name.endsWith(".xls")
+      || f.name.toLowerCase().endsWith(".csv") || isSpreadsheet(f)
     );
     setFiles(p=>[...p,...ok].slice(0,5));
     setParsed(false);
@@ -1209,7 +1212,7 @@ ${WS_PARSE_GUIDE}`;
         } else if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
           const text = await readDocxAsText(f);
           content.push({ type:"text", text:`[Document: ${f.name}]\n${text}` });
-        } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
+        } else if (isSpreadsheet(f)) {
           const text = await readSpreadsheetAsText(f);
           content.push({ type:"text", text:`[Spreadsheet: ${f.name}]\n${text}` });
         } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="application/csv" || f.type==="text/plain") {
@@ -1296,7 +1299,7 @@ ${WS_PARSE_GUIDE}`;
           if (f.name.endsWith(".docx") || f.type.includes("wordprocessingml")) {
             const text = await readDocxAsText(f);
             fileContents.push(`[Document: ${f.name}]\n${text}`);
-          } else if (f.name.endsWith(".xlsx") || f.name.endsWith(".xls") || f.type.includes("spreadsheetml") || f.type.includes("ms-excel")) {
+          } else if (isSpreadsheet(f)) {
             const text = await readSpreadsheetAsText(f);
             fileContents.push(`[Spreadsheet: ${f.name}]\n${text}`);
           } else if (f.name.endsWith(".csv") || f.type==="text/csv" || f.type==="text/plain") {
@@ -1659,7 +1662,7 @@ ${WS_PARSE_GUIDE}`;
                 onDrop={e=>{e.preventDefault();setDragOver(false);addFiles(e.dataTransfer.files);}}
                 onClick={()=>fileRef.current?.click()}
               >
-                <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg"
+                <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.png,.jpg"
                   onChange={e=>addFiles(e.target.files)} style={{display:"none"}} />
                 <div className="intake-upload-icon">⬆</div>
                 <h4>Drop files or click to upload</h4>
@@ -1868,7 +1871,7 @@ ${WS_PARSE_GUIDE}`;
               onDrop={e=>{e.preventDefault();setCustomFiles(p=>[...p,...Array.from(e.dataTransfer.files)].slice(0,5));}}
               onClick={()=>document.getElementById('custom-file-input').click()}
             >
-              <input id="custom-file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.csv,.txt,.png,.jpg" style={{display:"none"}} onChange={e=>setCustomFiles(p=>[...p,...Array.from(e.target.files)].slice(0,5))} />
+              <input id="custom-file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.png,.jpg" style={{display:"none"}} onChange={e=>setCustomFiles(p=>[...p,...Array.from(e.target.files)].slice(0,5))} />
               <div style={{fontSize:24,marginBottom:6}}>📎</div>
               <div style={{fontSize:13,color:"#7a8a9a"}}>Drop files or click to upload — PDF, DOCX, XLSX, CSV, images</div>
             </div>

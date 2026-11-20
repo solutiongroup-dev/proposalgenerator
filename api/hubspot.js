@@ -123,7 +123,7 @@ module.exports = async function (req, res) {
       pipeline, dealAmount, closeDate, closeProbability,
       sgContactName, sgContactEmail, customerContactName, customerContactEmail,
       existingDealId, generatedBy, dealSource,
-      managementCost, equipmentCost, laborCost, technologyCost,
+      managementCost, equipmentCost, laborCost, technologyCost, startupCost,
       projectLengthDays, contractLengthDays,
       companyId: rawCompanyId, newCompanyName, dealChoice: rawDealChoice, hubspotCompanyName,
       customerContactPhone, customerContactTitle, companyAddress,
@@ -169,6 +169,8 @@ module.exports = async function (req, res) {
       ...(parseCost(equipmentCost)  ? { equipment_cost:  String(parseCost(equipmentCost))  } : {}),
       ...(parseCost(laborCost)      ? { labor_cost:      String(parseCost(laborCost))      } : {}),
       ...(parseCost(technologyCost) ? { technology_cost: String(parseCost(technologyCost)) } : {}),
+      // Startup cost: always sent, 0 unless the form says otherwise
+      startup_cost: String(parseFloat(String(startupCost ?? '').replace(/[$,\s]/g, '')) || 0),
       ...(dealSource ? { deal_source: dealSource } : {}),
       ...(isProjectLike && projectLengthDays && effectiveCloseDate
         ? { estimated_project_end_date: addDays(effectiveCloseDate, projectLengthDays) } : {}),

@@ -402,6 +402,7 @@ const PIPELINE_FIELDS = [
   { key:"equipmentCost",   label:"Equipment Cost",   required:false, placeholder:"$0" },
   { key:"laborCost",       label:"Labor Cost",        required:false, placeholder:"$0" },
   { key:"technologyCost",  label:"Technology Cost",   required:false, placeholder:"$0" },
+  { key:"startupCost",     label:"Startup Cost",      required:false, placeholder:"$0" },   // starts at 0; saved to HubSpot as startup_cost
 ];
 
 const ASSESSMENT_FIELDS = [
@@ -827,6 +828,7 @@ export default function App() {
     const defaultCloseDate = threeMonths.toISOString().split('T')[0];
     return {
       closeDate: defaultCloseDate,
+      startupCost: "0",
       ...(saved && saved.trim() && saved !== "Proposal Generator" ? { generatedBy: saved } : {}),
     };
   });
@@ -1405,6 +1407,7 @@ ${WS_PARSE_GUIDE}`;
             equipmentCost:        formData.equipmentCost,
             laborCost:            formData.laborCost,
             technologyCost:       formData.technologyCost,
+            startupCost:          String(formData.startupCost ?? "").trim() || "0",
             projectLengthDays:    formData.projectLengthDays,
             contractLengthDays:   formData.contractLengthDays,
             existingDealId:       lastDealId,
@@ -1666,7 +1669,7 @@ ${WS_PARSE_GUIDE}`;
                   onChange={e=>addFiles(e.target.files)} style={{display:"none"}} />
                 <div className="intake-upload-icon">⬆</div>
                 <h4>Drop files or click to upload</h4>
-                <p>PDF, DOCX, XLSX, CSV, images</p>
+                <p>PDF, DOCX, Excel (incl. .xlsm), CSV, images</p>
               </div>
               {files.length > 0 && (
                 <div className="intake-files" style={{width:"100%"}}>
@@ -1873,7 +1876,7 @@ ${WS_PARSE_GUIDE}`;
             >
               <input id="custom-file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.png,.jpg" style={{display:"none"}} onChange={e=>setCustomFiles(p=>[...p,...Array.from(e.target.files)].slice(0,5))} />
               <div style={{fontSize:24,marginBottom:6}}>📎</div>
-              <div style={{fontSize:13,color:"#7a8a9a"}}>Drop files or click to upload — PDF, DOCX, XLSX, CSV, images</div>
+              <div style={{fontSize:13,color:"#7a8a9a"}}>Drop files or click to upload — PDF, DOCX, Excel (incl. .xlsm), CSV, images</div>
             </div>
             {customFiles.length > 0 && (
               <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:4}}>

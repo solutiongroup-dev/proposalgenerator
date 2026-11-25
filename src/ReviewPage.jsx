@@ -257,8 +257,9 @@ function DealCard({ deal, index, owner, token, open, done, onOpen, onDone, onSig
             <input type="date" className={cls("closeDate")} value={v.closeDate} onChange={e => set("closeDate", e.target.value)} /></div>
           <div className="rv-f"><label>Deal amount ($)</label>
             <input inputMode="decimal" className={cls("amount")} value={v.amount} onChange={e => set("amount", e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0" /></div>
-          <div className="rv-f"><label>Contract length (days)</label>
-            <input inputMode="numeric" className={cls("contractDays")} value={v.contractDays} onChange={e => set("contractDays", e.target.value.replace(/\D/g, ""))} placeholder="365" /></div>
+          {/* Contract length is for recurring service contracts; project deals don't have one */}
+          {deal.pipeline !== "Projects" && <div className="rv-f"><label>Contract length (days)</label>
+            <input inputMode="numeric" className={cls("contractDays")} value={v.contractDays} onChange={e => set("contractDays", e.target.value.replace(/\D/g, ""))} placeholder="365" /></div>}
           <div className="rv-f"><label>Estimated startup date</label>
             <input type="date" className={cls("startupDate")} value={v.startupDate} onChange={e => set("startupDate", e.target.value)} /></div>
           <div className="rv-f"><label>Deal stage</label>

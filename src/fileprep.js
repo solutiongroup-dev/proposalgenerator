@@ -41,7 +41,9 @@ async function downscaleImage(file, maxSide = 1568, quality = 0.75) {
   const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
   const c = document.createElement("canvas");
   c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
-  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);   // transparent PNGs get white, not black
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
   return canvasToJpeg(c, quality);
 }
 
@@ -90,12 +92,16 @@ export async function prepareBinaryFiles(files) {
   let remaining = BUDGET;
   // Smallest first, so one large file doesn't crowd out the rest
   const list = [...files].filter(f => f.type === "application/pdf" || f.type.startsWith("image/")).sort((a, b) => a.size - b.size);
+  // Photos are numbered in upload order, so "[Photo n: name]" lets the writer place them in the document
+  const photoNo = new Map([...files].filter(f => f.type.startsWith("image/")).map((f, i) => [f, i + 1]));
 
   for (const f of list) {
     if (f.type.startsWith("image/")) {
-      const blob = f.size > 400_000 ? await downscaleImage(f) : f;
+      // Large photos are shrunk; anything other than JPEG or PNG (WebP, HEIC, GIF) becomes a JPEG so it can go in the Word file
+      const blob = f.size > 400_000 || !/^image\/(jpeg|png)$/.test(f.type) ? await downscaleImage(f) : f;
       const size = b64Size(blob.size);
       if (size > remaining) throw new FileTooLargeError(`"${f.name}" is too large to send. Try fewer or smaller files.`);
+      blocks.push({ type: "text", text: `[Photo ${photoNo.get(f)}: ${String(f.name).replace(/[\[\]]/g, "")}]` });
       blocks.push({ type: "image", source: { type: "base64", media_type: blob.type || f.type, data: await readAsBase64(blob) } });
       remaining -= size;
       continue;

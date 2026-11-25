@@ -19,6 +19,7 @@ const {
   LevelFormat, VerticalAlign, ExternalHyperlink, PageOrientation,
 } = require('docx');
 const TERMS = require('./watersolve-terms');
+const { photoParagraphs } = require('./_photos');
 
 // Literal paths so Vercel's file tracing bundles the images with the function
 const LOGO_COVER  = fs.readFileSync(path.join(__dirname, 'ws_logo_cover.jpg'));   // 1173x262
@@ -268,6 +269,7 @@ function buildLetter(cfg, f, items, total) {
     ...list('This proposal includes the following technical services/ labor:', cfg.includes_labor,
       cfg.schedule_summary ? [bullet(cfg.schedule_summary, { bold: true })] : []),
     ...list('Items Specifically not provided in this proposal', exclusions),
+    ...photoSection(cfg),
     ...specialTerms(16),
     ...(f.wsIncludeStandardTerms === 'yes' ? standardTerms() : []),
   ];
@@ -382,6 +384,7 @@ function buildQuote(cfg, f, items, total) {
     new Paragraph({ spacing: { before: 120, after: 0 }, children: [new ImageRun({ data: LOGO_SGCO, transformation: { width: 180, height: 45 } })] }),
     p('WaterSolve LLC', { ...bold12, after: 0 }),
     ...WS_ADDRESS.map(a => p(a, { ...bold12, after: 0 })),
+    ...photoSection(cfg),
     ...specialTerms(18),
     ...(f.wsIncludeStandardTerms !== 'no' ? standardTerms() : []),
   ];
@@ -393,6 +396,13 @@ function buildQuote(cfg, f, items, total) {
       children,
     }],
   });
+}
+
+// Photos the person included (chosen and captioned by Claude), on their own page
+function photoSection(cfg) {
+  if (!cfg.__photos?.length) return [];
+  return [new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 120 }, children: [new TextRun({ text: cfg.photos_title || 'Process Overview', bold: true, size: 26 })] }),
+    ...photoParagraphs(cfg.__photos, { maxWidth: 580, maxHeight: 360 })];
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────

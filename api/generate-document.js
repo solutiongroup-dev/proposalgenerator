@@ -23,6 +23,7 @@ const {
 } = require('docx');
 
 const { buildWaterSolve, waterSolveConfigPrompt, parseLineItems } = require('./watersolve');
+const { uploadedPhotos, photoRules, chosenPhotos, askedForPhotos, attachPhotos, photoParagraphs } = require('./_photos');
 
 const API_KEY  = process.env.ANTHROPIC_API_KEY;
 const LOGO     = fs.readFileSync(path.join(__dirname, 'sg_logo.png'));
@@ -391,6 +392,10 @@ function buildProposal(cfg) {
       blueBar(`${sn()}. Service Confirmation`), ...spacer(1),
       body(cfg.sections?.service_confirmation || cfg.service_confirmation_text || ''), ...spacer(2),
     ],
+    photos: () => cfg.__photos?.length ? [
+      blueBar(`${sn()}. ${cfg.photos_title || 'Process Overview'}`), ...spacer(1),
+      ...photoParagraphs(cfg.__photos, { color: GRAY }), ...spacer(1),
+    ] : [],
     commercial_summary: () => oneTime ? [
       ...tableSection(sn(), { title: 'Commercial Summary', columns: ['Item', 'Amount'], align: ['left', 'right'],
         rows: lineItems.map(li => [li.description || '', fmt(li.monthly, cfg) || 'To be confirmed']),
@@ -420,9 +425,9 @@ function buildProposal(cfg) {
   };
 
   const proposalDefaultOrder = ['introduction','service_confirmation','commercial_summary','assumptions','next_steps'];
-  const proposalSectionOrder = Array.isArray(cfg.section_order) && cfg.section_order.length > 0
+  const proposalSectionOrder = withPhotos(cfg, Array.isArray(cfg.section_order) && cfg.section_order.length > 0
     ? cfg.section_order
-    : proposalDefaultOrder;
+    : proposalDefaultOrder);
 
   const sectionContent = proposalSectionOrder.flatMap(key => {
     if (PROPOSAL_SECTION_RENDERERS[key]) return PROPOSAL_SECTION_RENDERERS[key]();
@@ -528,6 +533,9 @@ function buildAssessment(cfg) {
       ...spacer(1),
     ]),
 
+    // Photos the person included, after the systems they show
+    ...(cfg.__photos?.length ? [blueBar(cfg.photos_title || 'Site Photos'), ...spacer(1), ...photoParagraphs(cfg.__photos, { color: GRAY }), ...spacer(1)] : []),
+
     // S7 Staffing
     blueBar('7. Operations & Maintenance Practices'), ...spacer(1),
     body(sm.current || '[Staffing model to be confirmed.]'),
@@ -563,6 +571,13 @@ function buildAssessment(cfg) {
       children
     }]
   });
+}
+
+// Photos go just before the Commercial Summary (or at the end), unless Claude placed them
+function withPhotos(cfg, order) {
+  if (!cfg.__photos?.length || order.includes('photos')) return order;
+  const i = order.indexOf('commercial_summary');
+  return i < 0 ? [...order, 'photos'] : [...order.slice(0, i), 'photos', ...order.slice(i)];
 }
 
 // ── PROJECT PROPOSAL BUILDER (v6-aligned) ────────────────────────────────────
@@ -661,6 +676,10 @@ function buildProject(cfg) {
       blueBar(`${sn()}. Engineering Scope Summary`), ...spacer(1),
       body(sections.engineering_scope || ''), ...spacer(2),
     ],
+    photos: () => cfg.__photos?.length ? [
+      blueBar(`${sn()}. ${cfg.photos_title || 'Process Overview'}`), ...spacer(1),
+      ...photoParagraphs(cfg.__photos, { color: GRAY }), ...spacer(1),
+    ] : [],
     commercial_summary: () => [
       blueBar(`${sn()}. Commercial Summary`), ...spacer(1),
       new Table({ width: { size: 9360, type: WidthType.DXA }, columnWidths: [7200, 2160], rows: [pricingHeaderRow, ...categoryRows, totalRow] }),
@@ -692,9 +711,9 @@ function buildProject(cfg) {
   const claudeOrder = Array.isArray(cfg.section_order) && cfg.section_order.length > 0 ? cfg.section_order : null;
   const defaultOrder = ['introduction','project_confirmation','engineering_scope','commercial_summary','timeline','assumptions','next_steps'];
   // Only use Claude's order if it contains at least the core valid keys — prevents hallucinated structures
-  const sectionOrder = (claudeOrder && claudeOrder.some(k => validKeys.includes(k)))
+  const sectionOrder = withPhotos(cfg, (claudeOrder && claudeOrder.some(k => validKeys.includes(k)))
     ? claudeOrder
-    : defaultOrder;
+    : defaultOrder);
 
   // Build section content — Claude can add custom sections anywhere via section_order
   const sectionContent = sectionOrder.flatMap(key => {
@@ -790,6 +809,8 @@ function parseConfig(raw) {
 // Ask Claude for a config; if the reply can't be read, ask once more
 async function getConfig(prompt, blocks = []) {
   // PDFs and images ride along ahead of the instructions, so Claude can read their prices and details
+  const photos = uploadedPhotos(blocks);
+  if (photos.length) prompt += photoRules(photos);
   const content = blocks.length ? [...blocks, { type: 'text', text: prompt }] : prompt;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const cfg = parseConfig(await callClaude([{ role: 'user', content }]));
@@ -1244,6 +1265,11 @@ Return ONLY the document content — no preamble, no explanation.`
         return;
       }
     }
+
+    // Photos the person uploaded that belong in the document (Claude picks them and writes captions)
+    const photos = uploadedPhotos(fileBlocks);
+    attachPhotos(cfg, chosenPhotos(cfg, photos, askedForPhotos([fileText, formData?.additionalInstructions, isRevision ? revisionInstructions : ''].join('\n'))));
+    if (photos.length) console.log(`Photos: ${photos.length} uploaded, ${cfg.__photos.length} placed in the document`);
 
     // 3. Build the docx
     let doc;

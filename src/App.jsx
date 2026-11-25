@@ -1184,7 +1184,7 @@ ${WS_PARSE_GUIDE}`;
        "image/png","image/jpeg"].includes(f.type)
       || f.name.toLowerCase().endsWith(".csv") || isSpreadsheet(f)
     );
-    setFiles(p=>[...p,...ok].slice(0,5));
+    setFiles(p=>[...p,...ok].slice(0,10));
     setParsed(false);
   };
 
@@ -1871,10 +1871,10 @@ ${WS_PARSE_GUIDE}`;
             <div
               style={{border:"2px dashed #c8d4e8",borderRadius:8,padding:"18px 24px",textAlign:"center",cursor:"pointer",background:"#fafbfc",transition:"all 0.18s"}}
               onDragOver={e=>{e.preventDefault();}}
-              onDrop={e=>{e.preventDefault();setCustomFiles(p=>[...p,...Array.from(e.dataTransfer.files)].slice(0,5));}}
+              onDrop={e=>{e.preventDefault();setCustomFiles(p=>[...p,...Array.from(e.dataTransfer.files)].slice(0,10));}}
               onClick={()=>document.getElementById('custom-file-input').click()}
             >
-              <input id="custom-file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.png,.jpg" style={{display:"none"}} onChange={e=>setCustomFiles(p=>[...p,...Array.from(e.target.files)].slice(0,5))} />
+              <input id="custom-file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.png,.jpg" style={{display:"none"}} onChange={e=>setCustomFiles(p=>[...p,...Array.from(e.target.files)].slice(0,10))} />
               <div style={{fontSize:24,marginBottom:6}}>📎</div>
               <div style={{fontSize:13,color:"#7a8a9a"}}>Drop files or click to upload — PDF, DOCX, Excel (incl. .xlsm), CSV, images</div>
             </div>

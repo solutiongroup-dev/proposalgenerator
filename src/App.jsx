@@ -520,17 +520,79 @@ async function readDocxAsText(file) {
 // Excel workbooks, including macro-enabled .xlsm and .xlsb: the data is read, macros are ignored (never run)
 const isSpreadsheet = f => /\.(xlsx|xlsm|xlsb|xls)$/i.test(f.name) || /spreadsheetml|ms-excel/.test(f.type);
 
-async function readSpreadsheetAsText(file) {
-  // Load SheetJS from CDN if not already loaded
-  if (!window.XLSX) {
-    await new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-      s.onload = res;
-      s.onerror = () => rej(new Error("Failed to load SheetJS"));
-      document.head.appendChild(s);
-    });
+// Solution Group's project tracker workbook: read the price straight from its Summary sheet
+// ("Sale Amount w/MU" and the Sale column of the Cost Breakdown Summary) instead of asking Claude.
+// Tracker categories map to the form's cost fields as: Equipment = Parts, Spare Parts, Freight;
+// Labor = Labor, Mileage, Travel, Lodging, Meals, Service Work; Technology = Programming,
+// Subscription; Management = Administrative, Warranty, Other (and anything new).
+function trackerPricing(XLSX, workbook) {
+  const sheet = workbook.Sheets["Summary"]; if (!sheet) return null;
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+  const num = v => typeof v === "number" ? v : (typeof v === "string" && /^\s*\$?\s*[\d,]+(\.\d+)?\s*$/.test(v) ? Number(v.replace(/[$,\s]/g, "")) : NaN);
+  const label = v => String(v ?? "").trim().toLowerCase();
+  let total = NaN, cats = {}, saleCol = -1, inBreakdown = false;
+  for (const r of rows) {
+    const i = r.findIndex(v => /^sale amount w\/\s*mu/.test(label(v)));
+    if (i >= 0 && isNaN(total)) total = r.slice(i + 1).map(num).find(n => !isNaN(n));
+    if (r.some(v => /^cost breakdown summary/.test(label(v)))) { inBreakdown = true; continue; }
+    if (inBreakdown && saleCol < 0) { const s = r.findIndex(v => label(v) === "sale"); if (s >= 0) { saleCol = s; continue; } }
+    if (inBreakdown && saleCol >= 0) {
+      const c = r.find(v => /^\d+\.\s*\S/.test(String(v).trim()));
+      if (!c) { if (Object.keys(cats).length) break; continue; }
+      const v = num(r[saleCol]); cats[String(c).trim().replace(/^\d+\.\s*/, "").toLowerCase()] = isNaN(v) ? 0 : v;
+    }
   }
+  if (!(total > 0) || !Object.keys(cats).length) return null;
+  const GROUPS = { equipmentCost: ["parts", "spare parts", "freight/shipping"], laborCost: ["labor", "mileage", "travel", "lodging", "meals", "service work"],
+    technologyCost: ["programming", "subscription fee"], managementCost: ["administrative", "warranty", "other"] };
+  const sums = Object.fromEntries(Object.entries(GROUPS).map(([k, names]) => [k, names.reduce((t, n) => t + (cats[n] || 0), 0)]));
+  const grouped = Object.values(sums).reduce((a, b) => a + b, 0);
+  const unmapped = Object.entries(cats).filter(([n, v]) => v && !Object.values(GROUPS).flat().includes(n)).reduce((t, [, v]) => t + v, 0);
+  sums.managementCost += unmapped;
+  const base = grouped + unmapped; if (!(base > 0)) return { dealAmount: total };
+  // The tracker's Sale column is before contingency; spread the contingency so the categories add up to the total
+  const k = total / base, out = { dealAmount: total }; let left = Math.round(total * 100);
+  const keys = Object.keys(sums).filter(x => sums[x] > 0);
+  keys.forEach((x, i) => { const c = i === keys.length - 1 ? left : Math.round(sums[x] * k * 100); out[x] = c / 100; left -= c; });
+  return out;
+}
+
+// SheetJS, loaded from the CDN the first time a spreadsheet is read
+async function loadXLSX() {
+  if (window.XLSX) return;
+  await new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = res;
+    s.onerror = () => rej(new Error("Failed to load SheetJS"));
+    document.head.appendChild(s);
+  });
+}
+
+async function readTrackerPricing(file) {
+  await loadXLSX();
+  return trackerPricing(window.XLSX, window.XLSX.read(await file.arrayBuffer(), { type: "array" }));
+}
+
+// Fill the price fields from a project tracker among the uploads (wins over Claude's reading)
+async function applyTrackerPricing(files, merged, filled) {
+  for (const f of files) {
+    if (!isSpreadsheet(f)) continue;
+    try {
+      const t = await readTrackerPricing(f);
+      if (!t) continue;
+      for (const [k, v] of Object.entries(t)) {
+        merged[k] = "$" + Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        filled.add(k);
+      }
+      console.info(`Pricing read from project tracker ${f.name}:`, t);
+      return;
+    } catch (e) { console.warn(`Could not read pricing from ${f.name}:`, e.message); }
+  }
+}
+
+async function readSpreadsheetAsText(file) {
+  await loadXLSX();
   const arrayBuffer = await file.arrayBuffer();
   const workbook = window.XLSX.read(arrayBuffer, { type: "array" });
   // Convert each sheet to CSV text and concatenate
@@ -1144,6 +1206,7 @@ ${WS_PARSE_GUIDE}`;
 
       // The type picked on the portal wins; Claude's guess only fills in when none was picked
       const suggested = chosenType || extracted.suggestedDocType || "project";
+      if (suggested !== "watersolve") await applyTrackerPricing(files, merged, filled);
       const defaultPipeline = suggested === "watersolve" ? "WaterSolve" : suggested === "project" ? "Project" : suggested === "proposal" ? "Recurring" : "";
       merged.pipeline = merged.pipeline || defaultPipeline;
       if (suggested === "watersolve") {
@@ -1233,6 +1296,7 @@ ${WS_PARSE_GUIDE}`;
       const filled = new Set();
       const merged = {...formData};
       Object.entries(extracted).forEach(([k,v])=>{ if(k==='generatedBy'||k==='pipeline') return; if(v&&String(v).trim()){merged[k]=String(v).trim();filled.add(k);} });
+      if (docType !== "watersolve") await applyTrackerPricing(files, merged, filled);
       setFormData(merged); setAiKeys(filled); setParsed(true);
     } catch(e) {
       if (e.message === "CORS_BLOCKED") {

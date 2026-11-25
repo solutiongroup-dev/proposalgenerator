@@ -535,7 +535,10 @@ async function readSpreadsheetAsText(file) {
   const workbook = window.XLSX.read(arrayBuffer, { type: "array" });
   // Convert each sheet to CSV text and concatenate
   const parts = [];
+  // Hidden sheets are templates and lookup lists (e.g. an empty "Small Bid" showing $0 totals), not the bid
+  const hidden = new Set((workbook.Workbook?.Sheets || []).filter(s => s.Hidden).map(s => s.name));
   for (const sheetName of workbook.SheetNames) {
+    if (hidden.has(sheetName)) continue;
     const sheet = workbook.Sheets[sheetName];
     const csv = window.XLSX.utils.sheet_to_csv(sheet, { skipHidden: true });
     // Filter out mostly-empty rows to keep token count reasonable
@@ -567,7 +570,7 @@ ${JSON.stringify([...allKeys, "sourceSummary"])}
 FIELD MAPPING GUIDANCE:
 - "sgContactName": look for SG rep or "Prepared By". Default to "Ted Winkelman" if not found.
 - "sgContactEmail": default to "twinkelman@solutionmgt.com" if not found.
-- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "Sale Amount w/MU", "TOTAL PROJECT INVESTMENT"; in Solution Group's project tracker workbook it is "Sale Amount w/MU" on the Summary sheet, and the "Sale" / "Sales Price" column of the cost breakdown gives our price per category, never the "Estimated" or "Actual" cost columns). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
 - "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
 - "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
 - "proposalDate": look for "Proposal Date" or document date. Format YYYY-MM-DD.
@@ -1102,7 +1105,7 @@ Extract values for these keys: ${JSON.stringify([...allKeys, "suggestedDocType"]
 FIELD MAPPING:
 - "sgContactName": default "Ted Winkelman" if not found
 - "sgContactEmail": default "twinkelman@solutionmgt.com" if not found
-- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "TOTAL PROJECT INVESTMENT"). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
+- "dealAmount": Solution Group's proposed price: the grand total of OUR quote or pricing (sell price, "Sales Price w/Contingency", "Sale Amount w/MU", "TOTAL PROJECT INVESTMENT"; in Solution Group's project tracker workbook it is "Sale Amount w/MU" on the Summary sheet, and the "Sale" / "Sales Price" column of the cost breakdown gives our price per category, never the "Estimated" or "Actual" cost columns). Never the customer's current spend, budget, a competitor's price or an internal cost. If our price is not stated, use "". Include $ and commas, e.g. "$209,509.48". For a recurring or monthly service, give the ANNUAL value (monthly fee x 12).
 - "monthlyFeeTotal": Solution Group's proposed monthly fee (sum of our monthly sell prices). Never what the customer pays today. "" if not stated.
 - "closeDate": the date the customer is expected to decide or sign (award, PO, board or committee approval), YYYY-MM-DD. Not the proposal due date, a site visit or the document date. "" if no decision date is given.
 - "proposalDate": the proposal or document date, YYYY-MM-DD
@@ -1184,6 +1187,8 @@ ${WS_PARSE_GUIDE}`;
        "image/png","image/jpeg"].includes(f.type)
       || f.name.toLowerCase().endsWith(".csv") || isSpreadsheet(f)
     );
+    const skipped = Array.from(incoming).filter(f => !ok.includes(f)).map(f => f.name);
+    setParseErr(skipped.length ? `Not added (this file type can't be read): ${skipped.join(", ")}. Use PDF, Word, Excel, CSV, text, or PNG/JPEG images.` : "");
     setFiles(p=>[...p,...ok].slice(0,10));
     setParsed(false);
   };

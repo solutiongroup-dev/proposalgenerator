@@ -573,6 +573,24 @@ function buildAssessment(cfg) {
   });
 }
 
+// A project whose Commercial Summary came back without prices gets them from the form
+// (filled from the project tracker): the four categories and the deal amount as the total.
+function fillProjectPricing(cfg, formData) {
+  const num = v => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(n) && n > 0 ? n : null; };
+  const p = cfg.pricing = cfg.pricing && typeof cfg.pricing === 'object' ? cfg.pricing : {};
+  const priced = (Array.isArray(p.categories) ? p.categories : []).filter(c => num(c?.amount));
+  const fromForm = [['Parts & Equipment', formData?.equipmentCost], ['Engineering & Labor', formData?.laborCost],
+    ['Operations & Management', formData?.managementCost], ['OptiClear Remote Management', formData?.technologyCost]]
+    .map(([name, v]) => ({ name, amount: num(v) })).filter(c => c.amount);
+  let filled = false;
+  if (!priced.length && fromForm.length) { p.categories = fromForm; filled = true; }
+  if (!num(p.total)) {
+    const total = num(formData?.dealAmount) || (p.categories || []).reduce((t, c) => t + (num(c.amount) || 0), 0);
+    if (total) { p.total = total; filled = true; }
+  }
+  if (filled) console.log('Project pricing filled from the form:', JSON.stringify({ total: p.total, categories: p.categories }));
+}
+
 // Photos go just before the Commercial Summary (or at the end), unless Claude placed them
 function withPhotos(cfg, order) {
   if (!cfg.__photos?.length || order.includes('photos')) return order;
@@ -1245,6 +1263,7 @@ Return ONLY the document content — no preamble, no explanation.`
       if (!hasRealTimeframes) cfg.timeline = [];
     }
 
+    if (docType === 'project') fillProjectPricing(cfg, formData);
     if (docType === 'watersolve') {
       cfg.line_items = parseLineItems(isRevision && Array.isArray(cfg.line_items) ? cfg.line_items : formData?.wsLineItems);
     } else if (!isRevision) {

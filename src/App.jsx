@@ -522,9 +522,10 @@ const isSpreadsheet = f => /\.(xlsx|xlsm|xlsb|xls)$/i.test(f.name) || /spreadshe
 
 // Solution Group's project tracker workbook: read the price straight from its Summary sheet
 // ("Sale Amount w/MU" and the Sale column of the Cost Breakdown Summary) instead of asking Claude.
-// Tracker categories map to the form's cost fields as: Equipment = Parts, Spare Parts, Freight;
-// Labor = Labor, Mileage, Travel, Lodging, Meals, Service Work; Technology = Programming,
-// Subscription; Management = Administrative, Warranty, Other (and anything new).
+// Tracker categories map to the form's cost fields (and the proposal's Commercial Summary) as:
+// Equipment = Parts, Spare Parts; Labor = Labor, Programming, Warranty, Freight, Service Work;
+// Management = Travel, Lodging, Meals, Mileage, Administrative, Other (and anything new);
+// Technology (OptiClear) = Subscription Fee.
 function trackerPricing(XLSX, workbook) {
   const sheet = workbook.Sheets["Summary"]; if (!sheet) return null;
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
@@ -543,8 +544,10 @@ function trackerPricing(XLSX, workbook) {
     }
   }
   if (!(total > 0) || !Object.keys(cats).length) return null;
-  const GROUPS = { equipmentCost: ["parts", "spare parts", "freight/shipping"], laborCost: ["labor", "mileage", "travel", "lodging", "meals", "service work"],
-    technologyCost: ["programming", "subscription fee"], managementCost: ["administrative", "warranty", "other"] };
+  // Same grouping as the proposal's Commercial Summary: Parts & Equipment, Engineering & Labor,
+  // Operations & Management, OptiClear Remote Management (subscription)
+  const GROUPS = { equipmentCost: ["parts", "spare parts"], laborCost: ["labor", "programming", "warranty", "freight/shipping", "service work"],
+    managementCost: ["travel", "lodging", "meals", "mileage", "administrative", "other"], technologyCost: ["subscription fee"] };
   const sums = Object.fromEntries(Object.entries(GROUPS).map(([k, names]) => [k, names.reduce((t, n) => t + (cats[n] || 0), 0)]));
   const grouped = Object.values(sums).reduce((a, b) => a + b, 0);
   const unmapped = Object.entries(cats).filter(([n, v]) => v && !Object.values(GROUPS).flat().includes(n)).reduce((t, [, v]) => t + v, 0);

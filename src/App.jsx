@@ -1362,8 +1362,8 @@ ${WS_PARSE_GUIDE}`;
         formData.dealAmount = fmtMoney(cfg.pricing.total); setField("dealAmount", formData.dealAmount);
       }
 
-      // The server checks that every pricing table adds up; show anything to fix before sending
-      if (result.warnings?.length) setGenErr(`Downloaded, but check the pricing before sending:\n• ${result.warnings.join('\n• ')}`);
+      // The server's pricing checks are kept in the browser console only, not shown on the page
+      if (result.warnings?.length) console.info('Pricing check:', result.warnings);
       const bytes = Uint8Array.from(atob(result.docBase64), c => c.charCodeAt(0));
       const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       // Filename: {Company} {3-word description} - {M.DD}, plus v2, v3... for revisions
@@ -1440,7 +1440,7 @@ ${WS_PARSE_GUIDE}`;
                 console.log(`✓ Document attached to deal ${data.dealId} (file ${j.fileId})`);
                 const co = data.company ? ` · ${data.company.existing ? "linked to" : "new company"} ${data.company.name}` : "";
                 const warn = data.warnings?.length ? ` · ${data.warnings.join(" ")}` : "";
-                setHubspotStatus({ state: data.warnings?.length ? "error" : "done", text:`Document attached to HubSpot deal "${data.dealName}"${data.pipeline ? ` in the ${data.pipeline} pipeline` : ""}${co}${warn}` });
+                setHubspotStatus({ state: data.warnings?.length ? "note" : "done", text:`Document attached to HubSpot deal "${data.dealName}"${data.pipeline ? ` in the ${data.pipeline} pipeline` : ""}${co}${warn}` });
               })
               .catch(e => {
                 console.warn('HubSpot attach failed:', e.message);
@@ -2060,6 +2060,7 @@ ${WS_PARSE_GUIDE}`;
                   color: hubspotStatus.state === "error" ? "#991b1b" : hubspotStatus.state === "done" ? "#166534" : "#5a6577",
                 }}>
                   {hubspotStatus.state === "done" ? "✓ " : hubspotStatus.state === "error" ? "⚠ " : ""}{hubspotStatus.text}
+                  {/* "note": saved, with something worth knowing; shown in plain grey, not as an error */}
                 </div>
               )}
             </div>

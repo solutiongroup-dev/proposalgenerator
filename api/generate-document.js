@@ -575,8 +575,48 @@ function buildAssessment(cfg) {
 
 // A project whose Commercial Summary came back without prices gets them from the form
 // (filled from the project tracker): the four categories and the deal amount as the total.
-function fillProjectPricing(cfg, formData) {
+// Solution Group's project tracker, read from the spreadsheet text the page sends
+// ("[Sheet: Summary]" as CSV): "Sale Amount w/MU" and the Sale column of the Cost Breakdown
+// Summary, grouped like the Commercial Summary, with the contingency spread so they add up.
+function trackerFromText(fileText) {
+  const m = /\[Sheet: Summary\]\n([\s\S]*?)(?=\n\[Sheet: |\n\n\[|\n---|$)/.exec(String(fileText || ''));
+  if (!m) return null;
+  const csvRow = line => { const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) { const ch = line[i];
+      if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch; }
+    out.push(cur); return out; };
+  const num = v => { const t = String(v ?? '').trim(); if (/^\$?\s*-\s*$/.test(t)) return 0; return /^\$?\s*[\d,]+(\.\d+)?$/.test(t) ? Number(t.replace(/[$,\s]/g, '')) : NaN; };
+  const label = v => String(v ?? '').trim().toLowerCase();
+  let total = NaN, saleCol = -1, inB = false; const cats = {};
+  for (const r of m[1].split('\n').map(csvRow)) {
+    const i = r.findIndex(v => /^sale amount w\/\s*mu/.test(label(v)));
+    if (i >= 0 && isNaN(total)) total = r.slice(i + 1).map(num).find(n => !isNaN(n) && n > 0);
+    if (r.some(v => /^cost breakdown summary/.test(label(v)))) { inB = true; continue; }
+    if (inB && saleCol < 0) { const s = r.findIndex(v => label(v) === 'sale'); if (s >= 0) { saleCol = s; continue; } }
+    if (inB && saleCol >= 0) {
+      const c = r.find(v => /^\d+\.\s*\S/.test(String(v).trim()));
+      if (!c) { if (Object.keys(cats).length) break; continue; }
+      const v = num(r[saleCol]); cats[String(c).trim().replace(/^\d+\.\s*/, '').toLowerCase()] = isNaN(v) ? 0 : v;
+    }
+  }
+  if (!(total > 0)) return null;
+  const GROUPS = { equipmentCost: ['parts', 'spare parts'], laborCost: ['labor', 'programming', 'warranty', 'freight/shipping', 'service work'],
+    managementCost: ['travel', 'lodging', 'meals', 'mileage', 'administrative', 'other'], technologyCost: ['subscription fee'] };
+  const known = Object.values(GROUPS).flat();
+  const sums = Object.fromEntries(Object.entries(GROUPS).map(([k, n]) => [k, n.reduce((t, x) => t + (cats[x] || 0), 0)]));
+  sums.managementCost += Object.entries(cats).filter(([n]) => !known.includes(n)).reduce((t, [, v]) => t + v, 0);
+  const base = Object.values(sums).reduce((a, b) => a + b, 0), out = { dealAmount: total };
+  if (base > 0) { let left = Math.round(total * 100); const keys = Object.keys(sums).filter(k => sums[k] > 0);
+    keys.forEach((k, i) => { const c = i === keys.length - 1 ? left : Math.round(sums[k] * total / base * 100); out[k] = c / 100; left -= c; }); }
+  return out;
+}
+
+function fillProjectPricing(cfg, formData, fileText) {
   const num = v => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(n) && n > 0 ? n : null; };
+  // The form's price fields, or the tracker itself when the form has none
+  const t = trackerFromText(fileText);
+  if (t) formData = { ...formData, ...Object.fromEntries(Object.entries(t).filter(([k]) => !num(formData?.[k]))) };
   const p = cfg.pricing = cfg.pricing && typeof cfg.pricing === 'object' ? cfg.pricing : {};
   const priced = (Array.isArray(p.categories) ? p.categories : []).filter(c => num(c?.amount));
   const fromForm = [['Parts & Equipment', formData?.equipmentCost], ['Engineering & Labor', formData?.laborCost],
@@ -1263,7 +1303,7 @@ Return ONLY the document content — no preamble, no explanation.`
       if (!hasRealTimeframes) cfg.timeline = [];
     }
 
-    if (docType === 'project') fillProjectPricing(cfg, formData);
+    if (docType === 'project') fillProjectPricing(cfg, formData, fileText);
     if (docType === 'watersolve') {
       cfg.line_items = parseLineItems(isRevision && Array.isArray(cfg.line_items) ? cfg.line_items : formData?.wsLineItems);
     } else if (!isRevision) {
